@@ -1,0 +1,29 @@
+2020-08-03 11:13:29,204 REMOVING ATOM B FROM DATASET
+2020-08-03 11:13:29,204 train size: 100
+2020-08-03 11:13:29,204 validation size: 1000
+2020-08-03 11:13:30,438 device name: GeForce GTX 1660 Ti
+2020-08-03 11:13:30,438 Cuda mem allocated: 17.40 MB
+2020-08-03 11:13:30,541 model params: 743518
+2020-08-03 11:13:30,544 start training...
+2020-08-03 11:13:33,858 Validating dataset:  loss: 7.187050 emae: 6.845157 ermse: 8.707471 qmae: 0.000000 qrmse: 0.000000 pmae: 0.341893 prmse: 0.463013 
+2020-08-03 11:13:33,859 Init lr: 0.001
+2020-08-03 11:13:45,071 epoch 0 ended, learning rate: 0.001 
+2020-08-03 11:13:47,371 Validating dataset:  loss: 7.187925 emae: 6.845085 ermse: 8.707451 qmae: 0.001190 qrmse: 0.001272 pmae: 0.341649 prmse: 0.462677 
+2020-08-03 11:13:47,826 epoch 1 ended, learning rate: 0.001 
+2020-08-03 11:13:50,127 Validating dataset:  loss: 7.187989 emae: 6.844951 ermse: 8.707393 qmae: 0.001497 qrmse: 0.001616 pmae: 0.341541 prmse: 0.462527 
+2020-08-03 11:13:50,576 epoch 2 ended, learning rate: 0.001 
+2020-08-03 11:13:52,875 Validating dataset:  loss: 7.187290 emae: 6.844751 ermse: 8.707300 qmae: 0.000977 qrmse: 0.001104 pmae: 0.341562 prmse: 0.462555 
+2020-08-03 11:13:53,324 epoch 3 ended, learning rate: 0.001 
+2020-08-03 11:13:55,631 Validating dataset:  loss: 7.186501 emae: 6.844486 ermse: 8.707174 qmae: 0.000385 qrmse: 0.000488 pmae: 0.341630 prmse: 0.462647 
+2020-08-03 11:13:56,302 epoch 4 ended, learning rate: 0.001 
+2020-08-03 11:13:58,602 Validating dataset:  loss: 7.186320 emae: 6.844156 ermse: 8.707016 qmae: 0.000460 qrmse: 0.000575 pmae: 0.341704 prmse: 0.462748 
+2020-08-03 11:13:59,213 epoch 5 ended, learning rate: 0.001 
+2020-08-03 11:14:01,527 Validating dataset:  loss: 7.186529 emae: 6.843763 ermse: 8.706824 qmae: 0.000987 qrmse: 0.001081 pmae: 0.341779 prmse: 0.462850 
+2020-08-03 11:14:01,977 epoch 6 ended, learning rate: 0.001 
+2020-08-03 11:14:04,292 Validating dataset:  loss: 7.186699 emae: 6.843307 ermse: 8.706596 qmae: 0.001533 qrmse: 0.001622 pmae: 0.341859 prmse: 0.462957 
+2020-08-03 11:14:04,743 epoch 7 ended, learning rate: 0.001 
+2020-08-03 11:14:07,054 Validating dataset:  loss: 7.186838 emae: 6.842790 ermse: 8.706331 qmae: 0.002102 qrmse: 0.002202 pmae: 0.341946 prmse: 0.463075 
+2020-08-03 11:14:07,548 epoch 8 ended, learning rate: 0.001 
+2020-08-03 11:14:09,933 Validating dataset:  loss: 7.186986 emae: 6.842214 ermse: 8.706025 qmae: 0.002728 qrmse: 0.002851 pmae: 0.342044 prmse: 0.463208 
+2020-08-03 11:14:10,390 epoch 9 ended, learning rate: 0.001 
+2020-08-03 11:14:12,771 Validating dataset:  loss: 7.187068 emae: 6.841579 ermse: 8.705678 qmae: 0.003351 qrmse: 0.003500 pmae: 0.342138 prmse: 0.463335 
