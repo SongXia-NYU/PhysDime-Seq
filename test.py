@@ -19,7 +19,7 @@ from Networks.UncertaintyLayers.swag import SWAG
 from PhysDimeIMDataset import PhysDimeIMDataset
 from PlatinumTestIMDataSet import PlatinumTestIMDataSet
 from qm9InMemoryDataset import Qm9InMemoryDataset
-from train import val_step, data_provider_solver
+from train import val_step, data_provider_solver, val_step_new
 from utils.LossFn import LossFn
 from utils.utils_functions import add_parser_arguments, kwargs_solver, device, floating_type, \
     collate_fn, remove_handler
@@ -244,7 +244,7 @@ def dataset_getter(dataset_name, args):
         raise NotImplemented('not implemented')
     elif dataset_name.split('_')[0] == 'frag9to20':
         # convert all to jianing split for consistent split
-        if dataset_name.split('[')[0] == 'frag9to20_all':
+        if dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
             dataset_name = dataset_name.replace('all', 'jianing', 1)
         dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
                                                               'pre_transform': my_pre_transform,
@@ -252,6 +252,8 @@ def dataset_getter(dataset_name, args):
                                                               'type_3_body': 'B',
                                                               'cal_3body_term': True})
         dataset_train = dataset(**kw_arg)
+        if args.action != "E":
+            return dataset_train
         kw_arg['training_option'] = 'test'
         return dataset_train, dataset(**kw_arg)
     elif dataset_name == 'conf20':
@@ -266,14 +268,14 @@ def dataset_getter(dataset_name, args):
 
 def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Loss(reduction='mean'),
               mse_fn=torch.nn.MSELoss(reduction='mean'), dataset_name='data', run_dir=None,
-              n_forward=50):
+              n_forward=50, **kwargs):
     if args.uncertainty_modify == 'none':
-        result = val_step(net, data_loader, total_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                          dataset_name=dataset_name, detailed_info=True)
-        torch.save(result, os.path.join(run_dir, 'loss.pt'))
+        result = val_step_new(net, data_loader, loss_fn)
+        torch.save(result, os.path.join(run_dir, 'loss_{}.pt'.format(dataset_name)))
         return result, None
     elif args.uncertainty_modify.split('_')[0].split('[')[0] in ['concreteDropoutModule', 'concreteDropoutOutput',
                                                                  'swag']:
+        print("You need to update the code for val_step_new")
         if os.path.exists(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward))):
             print('loading exist files!')
             avg_result = torch.load(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
@@ -286,7 +288,7 @@ def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Los
                 if args.uncertainty_modify.split('_')[0] == 'swag':
                     net.sample(scale=1.0, cov=True)
                 result_i = val_step(net, data_loader, total_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                                    dataset_name=dataset_name, print_to_log=False, detailed_info=True)
+                                    dataset_name=dataset_name, print_to_log=False, detailed_info=True, **kwargs)
 
                 for key in cum_result.keys():
                     cum_result[key].append(result_i[key])
@@ -336,9 +338,10 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
         model_data = torch.load(os.path.join(folder_name, 'best_model.pt'), map_location=device)
 
     net.load_state_dict(model_data)
-
     w_e, w_f, w_q, w_p = 1, args.force_weight, args.charge_weight, args.dipole_weight
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p)
+
+    action = args.target_names if args.action != "E" else "E"
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=action)
 
     mae_fn = torch.nn.L1Loss(reduction='mean')
     mse_fn = torch.nn.MSELoss(reduction='mean')
@@ -463,34 +466,38 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             data_provider_test = data_provider
         val_index = data_provider.val_index
         test_index = data_provider_test.test_index
-        for atom_id in args.remove_atom_ids:
-            _, val_index, _ = remove_atom_from_dataset(atom_id, data_provider, ("valid",), (None, val_index, None))
+        if args.remove_atom_ids > 0:
+            _, val_index, _ = remove_atom_from_dataset(args.remove_atom_ids, data_provider, ("valid",),
+                                                       (None, val_index, None))
             print('removing B from test dataset...')
-            _, _, test_index = remove_atom_from_dataset(atom_id, data_provider_test, ('test',),
+            _, _, test_index = remove_atom_from_dataset(args.remove_atom_ids, data_provider_test, ('test',),
                                                         (None, None, test_index))
+
         if val_index is not None:
             val_data_loader = torch.utils.data.DataLoader(
                 data_provider[torch.as_tensor(val_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
                 pin_memory=torch.cuda.is_available(), shuffle=False)
             test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                      dataset_name='{}_valid'.format(test_dataset), run_dir=test_directory, n_forward=n_forward)
+                      dataset_name='{}_valid'.format(test_dataset), run_dir=test_directory, n_forward=n_forward,
+                      action=action)
         test_data_loader = torch.utils.data.DataLoader(
             data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available(), shuffle=False)
         test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                              mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_directory, n_forward=n_forward)
-        if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
-            loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
-                            data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
-            torch.save(loss, os.path.join(test_directory, 'loss.pt'))
-        E_pred = test_info['E_pred']
-        if test_info_std is not None:
-            E_pred_std = test_info_std['E_pred']
-        else:
-            E_pred_std = None
-        test_info_analyze(23.061 * E_pred, 23.061 * data_provider_test.data.E[test_index],
-                          test_directory, logger, pred_std=E_pred_std, x_forward=x_forward)
+                                             run_dir=test_directory, n_forward=n_forward, action=action)
+        # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
+        #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
+        #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
+        #     torch.save(loss, os.path.join(test_directory, 'loss.pt'))
+        if "E_pred" in test_info:
+            E_pred = test_info['E_pred']
+            if test_info_std is not None:
+                E_pred_std = test_info_std['E_pred']
+            else:
+                E_pred_std = None
+            test_info_analyze(23.061 * E_pred, 23.061 * data_provider_test.data.E[test_index],
+                              test_directory, logger, pred_std=E_pred_std, x_forward=x_forward)
     elif test_dataset.split(':')[0] == 'frag20n9':
         data_provider = Frag9to20MixIMDataset(root='../dataProviders/data', split_settings=uniform_split,
                                               pre_transform=my_pre_transform, frag20n9=True)

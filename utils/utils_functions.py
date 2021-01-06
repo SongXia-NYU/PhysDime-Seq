@@ -32,6 +32,9 @@ atom_ref = {1: -0.500273, 6: -37.846772, 7: -54.583861, 8: -75.064579, 9: -99.71
 
 matrix_to_index_map = {}
 
+mae_fn = torch.nn.L1Loss(reduction='mean')
+mse_fn = torch.nn.MSELoss(reduction='mean')
+
 
 def _cutoff_fn(D, cutoff):
     """
@@ -372,7 +375,7 @@ def get_kd_tree_array(R, N):
     return kd_trees
 
 
-def cal_mean_std(E, N, index):
+def atom_mean_std(E, N, index):
     """
     calculate the mean and stand variance of Energy in the training set
     :return:
@@ -620,7 +623,7 @@ def kwargs_solver(args):
 
     DNNKwargs = {'n_atom_embedding': 95,
                  'n_feature': args.n_feature,
-                 'n_output': 2,
+                 'n_output': args.n_output,
                  'n_dime_before_residual': args.n_dime_before_residual,
                  'n_dime_after_residual': args.n_dime_after_residual,
                  'n_output_dense': args.n_output_dense,
@@ -638,7 +641,8 @@ def kwargs_solver(args):
                  'modules': args.modules,
                  'bonding_type': args.bonding_type,
                  'uncertainty_modify': args.uncertainty_modify,
-                 'coulomb_charge_correct': coulomb_charge_correct
+                 'coulomb_charge_correct': coulomb_charge_correct,
+                 'action': args.action
                  }
     return DNNKwargs
 
@@ -699,11 +703,16 @@ def add_parser_arguments(parser):
     parser.add_argument('--optimizer', type=str, default='emaAms_0.999', help="emaAms_${ema} | sgd")
     parser.add_argument('--freeze_option', type=str, default='none', help='none | prev | prev_extra')
     parser.add_argument('--comment', type=str, help='just comment')
-    parser.add_argument('--remove_atom_ids', type=list, default=[5], help='remove atoms from dataset')
+    parser.add_argument('--remove_atom_ids', type=int, default=5, help='remove atoms from dataset')
     parser.add_argument('--coulomb_charge_correct', type=str, default="False",
                         help='calculate charge correction when calculation Coulomb interaction')
     parser.add_argument('--reset_optimizer', type=str, default="True",
                         help='If true, will reset optimizer regardless of if you use pretrained model or not')
+    parser.add_argument("--n_output", type=int, default=2, help="number of outputs, defaults to 2 for energy and charge"
+                                                                "predictions.")
+    parser.add_argument("--action", type=str, default="E", help="name of target, must be consistent with name in"
+                                                                "data_provider, default E is for PhysNet energy")
+    parser.add_argument("--target_names", type=str, action="append", default=[])
     return parser
 
 

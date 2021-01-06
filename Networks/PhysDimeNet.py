@@ -52,7 +52,8 @@ class PhysDimeNet(nn.Module):
                  coulomb_charge_correct,
                  energy_shift=None,
                  energy_scale=None,
-                 debug_mode=False):
+                 debug_mode=False,
+                 action="E"):
         """
         
         :param n_atom_embedding: number of atoms to embed, usually set to 95
@@ -68,6 +69,7 @@ class PhysDimeNet(nn.Module):
         super().__init__()
 
         # convert input into a dictionary
+        self.action = action
         self.coulomb_charge_correct = coulomb_charge_correct
         self.uncertainty_modify = uncertainty_modify
         self.expansion_fn = expansion_splitter(expansion_fn)
@@ -235,9 +237,15 @@ class PhysDimeNet(nn.Module):
                 shift_matrix = torch.zeros(95, n_output).type(floating_type)
                 scale_matrix = torch.zeros(95, n_output).type(floating_type).fill_(1.0)
                 if energy_shift is not None:
-                    shift_matrix[:, 0] = energy_shift
+                    if isinstance(energy_shift, torch.Tensor):
+                        shift_matrix[:, :] = energy_shift.view(1, -1)
+                    else:
+                        shift_matrix[:, 0] = energy_shift
                 if energy_scale is not None:
-                    scale_matrix[:, 0] = energy_scale
+                    if isinstance(energy_scale, torch.Tensor):
+                        scale_matrix[:, :] = energy_scale.view(1, -1)
+                    else:
+                        scale_matrix[:, 0] = energy_scale
                 shift_matrix = shift_matrix / len(self.bonding_type_keys)
                 self.register_parameter('scale', torch.nn.Parameter(scale_matrix, requires_grad=True))
                 self.register_parameter('shift', torch.nn.Parameter(shift_matrix, requires_grad=True))
@@ -261,7 +269,7 @@ class PhysDimeNet(nn.Module):
         for i in range(len(self.modules)):
             getattr(self, 'module{}'.format(i)).freeze_prev_layers()
 
-    def forward(self, data):
+    def forward(self, data, action="E"):
         # torch.cuda.synchronize(device=device)
         # t0 = time.time()
 
@@ -467,5 +475,7 @@ class PhysDimeNet(nn.Module):
         if self.debug_mode:
             if torch.abs(E_pred.detach()).max() > 1e4:
                 error_message(torch.abs(E_pred.detach()).max(), 'Energy prediction')
-
-        return E_pred, F_pred, Q_pred, D_pred, nh_loss
+        if self.action == "E":
+            return E_pred, F_pred, Q_pred, D_pred, nh_loss
+        else:
+            return mol_pred_properties, 0., 0., 0., nh_loss

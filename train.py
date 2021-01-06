@@ -4,9 +4,11 @@ import argparse
 import logging
 import math
 import os
+import os.path as osp
 import shutil
 import time
 from datetime import datetime
+from typing import Union, List
 
 import numpy as np
 import torch
@@ -26,7 +28,7 @@ from utils.Optimizers import EmaAmsGrad, MySGD
 from utils.LossFn import LossFn
 from utils.time_meta import print_function_runtime, record_data
 from utils.utils_functions import device, add_parser_arguments, floating_type, kwargs_solver, get_lr, collate_fn, \
-    load_data_from_index, get_n_params, cal_mean_std, print_val_results, remove_handler, option_solver
+    load_data_from_index, get_n_params, atom_mean_std, print_val_results, remove_handler, option_solver, mae_fn, mse_fn
 
 
 def data_provider_solver(name, _kw_args):
@@ -37,6 +39,8 @@ def data_provider_solver(name, _kw_args):
     :return:
     """
     _options = option_solver(name)
+    if "add_sol" in _options.keys():
+        _options["add_sol"] = (_options["add_sol"] == "True")
     name = name.split('[')[0]
     for key in _options.keys():
         _kw_args[key] = _options[key]
@@ -86,7 +90,7 @@ def data_provider_solver(name, _kw_args):
                                                'SDF': 'eMol9_{}.pt'.format(geometry)
                                            })
         len_e9 = len(e_mol9_dataset)
-        _kw_args['train_index'] = torch.cat([train_index, torch.arange(len_frag20, len_e9+len_frag20)])
+        _kw_args['train_index'] = torch.cat([train_index, torch.arange(len_frag20, len_e9 + len_frag20)])
         _kw_args['dataset_list'] = [frag20dataset, e_mol9_dataset]
         return CombinedIMDataset, _kw_args
     else:
@@ -127,7 +131,8 @@ def train_step(model, _optimizer, data_batch, loss_fn, max_norm, warm_up_schedul
 
 
 def val_step(model, _data_loader, data_size, loss_fn, mae_fn, mse_fn, dataset_name='dataset', detailed_info=False,
-             print_to_log=True):
+             print_to_log=True, action: Union[List[str], str] = "E"):
+    # TODO Deprecated, planning to write a new one
     model.eval()
     loss, emae, emse, fmae, fmse, qmae, qmse, pmae, pmse = 0, 0, 0, 0, 0, 0, 0, 0, 0
 
@@ -151,18 +156,20 @@ def val_step(model, _data_loader, data_size, loss_fn, mae_fn, mse_fn, dataset_na
         loss2 = loss_nh.item()
         loss += _batch_size * (loss1 + loss2)
 
-        emae += _batch_size * mae_fn(E_pred, val_data.E.to(device)).item()
-        emse += _batch_size * mse_fn(E_pred, val_data.E.to(device)).item()
+        emae += _batch_size * mae_fn(E_pred, getattr(val_data, action).to(device)).item()
+        emse += _batch_size * mse_fn(E_pred, getattr(val_data, action).to(device)).item()
 
-        qmae += _batch_size * mae_fn(Q_pred, val_data.Q.to(device)).item()
-        qmse += _batch_size * mse_fn(Q_pred, val_data.Q.to(device)).item()
+        if Q_pred is not None:
+            qmae += _batch_size * mae_fn(Q_pred, val_data.Q.to(device)).item()
+            qmse += _batch_size * mse_fn(Q_pred, val_data.Q.to(device)).item()
 
-        pmae += _batch_size * mae_fn(D_pred, val_data.D.to(device)).item()
-        pmse += _batch_size * mse_fn(D_pred, val_data.D.to(device)).item()
+            pmae += _batch_size * mae_fn(D_pred, val_data.D.to(device)).item()
+            pmse += _batch_size * mse_fn(D_pred, val_data.D.to(device)).item()
 
         if detailed_info:
             for aggr, pred in zip([E_pred_aggr, Q_pred_aggr, D_pred_aggr], [E_pred, Q_pred, D_pred]):
-                aggr[idx_before: _batch_size + idx_before] = pred.detach().cpu()
+                if pred is not None:
+                    aggr[idx_before: _batch_size + idx_before] = pred.detach().cpu()
                 # aggr[idx_before: _batch_size + idx_before] = val_data.E.detach().cpu().view(-1)
             idx_before = idx_before + _batch_size
 
@@ -188,6 +195,29 @@ def val_step(model, _data_loader, data_size, loss_fn, mae_fn, mse_fn, dataset_na
     return result
 
 
+def val_step_new(model, _data_loader, loss_fn):
+    model.eval()
+    valid_size = 0
+    loss = 0.
+    detail = None
+    for val_data in _data_loader:
+        _batch_size = len(val_data.E)
+        E_pred, F_pred, Q_pred, D_pred, loss_nh = model(val_data)
+        aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data, requires_detail=True)
+        loss += aggr_loss.item() * _batch_size
+        valid_size += _batch_size
+        if detail is None:
+            detail = loss_detail
+        else:
+            for key in detail:
+                detail[key] += loss_detail[key] * _batch_size
+    loss /= valid_size
+    for key in detail:
+        detail[key] /= valid_size
+    detail["loss"] = loss
+    return detail
+
+
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     net_kwargs = kwargs_solver(config_args)
 
@@ -195,10 +225,15 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     use_trained_model = (config_args.use_trained_model.lower() != 'false')
     use_swag = (config_args.uncertainty_modify.split('_')[0] == 'swag')
 
-    # set up run directory
-    current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-    run_directory = config_args.folder_prefix + '_run_' + current_time
-    os.mkdir(run_directory)
+    while True:
+        # set up run directory
+        current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+        run_directory = config_args.folder_prefix + '_run_' + current_time
+        if not os.path.exists(run_directory):
+            os.mkdir(run_directory)
+            break
+        else:
+            time.sleep(10)
 
     shutil.copyfile(config_args.config_name, os.path.join(run_directory, config_args.config_name))
 
@@ -216,10 +251,12 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         train_index, val_index, test_index = explicit_split
     else:
         train_index, val_index, test_index = data_provider.train_index, data_provider.val_index, data_provider.test_index
-        for atom_id in config_args.remove_atom_ids:
+        if config_args.remove_atom_ids > 0:
             # remove B atom from dataset
-            train_index, val_index, test_index = remove_atom_from_dataset(atom_id, data_provider, remove_split=('train', 'valid'),
-                                                                          explicit_split=(train_index, val_index, test_index))
+            train_index, val_index, test_index = remove_atom_from_dataset(config_args.remove_atom_ids, data_provider,
+                                                                          remove_split=('train', 'valid'),
+                                                                          explicit_split=(
+                                                                              train_index, val_index, test_index))
         logger.info('REMOVING ATOM {} FROM DATASET'.format(config_args.remove_atom_ids))
         print('REMOVING ATOM {} FROM DATASET'.format(config_args.remove_atom_ids))
 
@@ -237,16 +274,29 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         data_provider[torch.as_tensor(val_index)], batch_size=config_args.valid_batch_size, collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(), shuffle=True)
 
-    mae_fn = torch.nn.L1Loss(reduction='mean')
-    mse_fn = torch.nn.MSELoss(reduction='mean')
-    w_e, w_f, w_q, w_p = 1, config_args.force_weight, config_args.charge_weight, config_args.dipole_weight
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p)
+    w_e, w_f, w_q, w_p = 1., config_args.force_weight, config_args.charge_weight, config_args.dipole_weight
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_args.action)
 
     # ###################################Setting up model and optimizer############################################# #
     # Normalization of PhysNet atom-wise prediction
-    E_mean_atom, E_std_atom = cal_mean_std(data_provider.data.E, data_provider.data.N, train_index)
-    E_atomic_scale = E_std_atom
-    E_atomic_shift = E_mean_atom
+    if config_args.action == "E":
+        mean_atom, std_atom = atom_mean_std(getattr(data_provider.data, config_args.action),
+                                            data_provider.data.N, train_index)
+    elif isinstance(config_args.action, list):
+        mean_atom = []
+        std_atom = []
+        for name in config_args.action:
+            this_mean, this_std = atom_mean_std(getattr(data_provider.data, name), data_provider.data.N, train_index)
+            mean_atom.append(this_mean)
+            std_atom.append(this_std)
+        mean_atom = torch.as_tensor(mean_atom)
+        std_atom = torch.as_tensor(std_atom)
+    elif config_args.action == "solubility":
+        raise NotImplemented
+    else:
+        raise ValueError("Invalid action: {}".format(config_args.action))
+    E_atomic_scale = std_atom
+    E_atomic_shift = mean_atom
 
     net_kwargs['energy_shift'] = E_atomic_shift
     net_kwargs['energy_scale'] = E_atomic_scale
@@ -325,9 +375,13 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
 
     # ###################################Training############################################# #
     logger.info('start training...')
+    with open(osp.join(run_directory, "loss_data.csv"), "w") as f:
+        f.write("epoch,train_loss,valid_loss,time\n")
 
     shadow_net = optimizer.shadow_model
-    val_loss = val_step(shadow_net, val_data_loader, val_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn)
+    val_loss = val_step_new(shadow_net, val_data_loader, loss_fn)
+    with open(osp.join(run_directory, "loss_data.csv"), "a") as f:
+        f.write("0,-1,{},{}\n".format(val_loss["loss"], time.time()))
     best_loss = val_loss['loss']
 
     logger.info('Init lr: {}'.format(get_lr(optimizer)))
@@ -347,20 +401,16 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
 
         logger.info('epoch {} ended, learning rate: {} '.format(epoch, get_lr(optimizer)))
         shadow_net = optimizer.shadow_model
-        val_loss = val_step(shadow_net, val_data_loader, val_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn)
+        val_loss = val_step_new(shadow_net, val_data_loader, loss_fn)
 
         _loss_data_this_epoch = {'epoch': epoch,
                                  't_loss': train_loss,
                                  'v_loss': val_loss['loss'],
-                                 'v_emae': val_loss['emae'],
-                                 'v_ermse': val_loss['ermse'],
-                                 'v_qmae': val_loss['qmae'],
-                                 'v_qrmse': val_loss['qrmse'],
-                                 'v_pmae': val_loss['pmae'],
-                                 'v_prmse': val_loss['prmse'],
-                                 'time': time.time()}
+                                 'time': time.time()}.update(val_loss)
         loss_data.append(_loss_data_this_epoch)
         torch.save(loss_data, os.path.join(run_directory, 'loss_data.pt'))
+        with open(osp.join(run_directory, "loss_data.csv"), "a") as f:
+            f.write("{},{},{},{}\n".format(epoch, train_loss, val_loss["loss"], time.time()))
         if use_swag:
             start, freq = config_args.uncertainty_modify.split('_')[1], config_args.uncertainty_modify.split('_')[2]
             if epoch > int(start) and (epoch % int(freq) == 0):
@@ -405,6 +455,8 @@ def main():
         config_name = args.config_name
         args, unknown = parser.parse_known_args(["@" + config_name])
     args.config_name = config_name
+    if args.action == "names":
+        args.action = args.target_names
 
     _kwargs = {'root': '../dataProviders/data', 'pre_transform': my_pre_transform, 'record_long_range': True,
                'type_3_body': 'B', 'cal_3body_term': True}
