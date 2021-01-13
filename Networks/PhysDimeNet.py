@@ -439,6 +439,8 @@ class PhysDimeNet(nn.Module):
                                                                                   this_edge_index, q_ref=Q, N=N,
                                                                                   atom_mol_batch=atom_mol_batch)
                 else:
+                    print("one of the variables needed for gradient computation has been modified by an inplace"
+                          " operation: need to be fixed here, probably in function cal_coulomb_E")
                     coulomb_correction = self._modules["post_module{}".format(i)](atom_prop[:, 1], this_expansion,
                                                                                   this_edge_index)
                 atom_prop[:, 0] = atom_prop[:, 0] + coulomb_correction

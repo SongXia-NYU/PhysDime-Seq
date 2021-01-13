@@ -19,7 +19,8 @@ from Networks.UncertaintyLayers.swag import SWAG
 from PhysDimeIMDataset import PhysDimeIMDataset
 from PlatinumTestIMDataSet import PlatinumTestIMDataSet
 from qm9InMemoryDataset import Qm9InMemoryDataset
-from train import val_step, data_provider_solver, val_step_new
+from train import data_provider_solver, val_step_new, default_kwargs, _add_arg_from_config
+from deprecated_code.junk_code import val_step
 from utils.LossFn import LossFn
 from utils.utils_functions import add_parser_arguments, kwargs_solver, device, floating_type, \
     collate_fn, remove_handler
@@ -225,45 +226,65 @@ def test_info_analyze(pred, target, test_dir, logger=None, name='Energy', thresh
     return
 
 
-def dataset_getter(dataset_name, args):
-    # redirect to train.py dataset getter. It is needed because different dataset share the same test set
-    if dataset_name.split('_')[0].split('[')[0] == 'qm9':
-        dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
-                                                              'pre_transform': my_pre_transform,
-                                                              'record_long_range': True,
-                                                              'type_3_body': 'B',
-                                                              'cal_3body_term': True})
-        dataset_ = dataset(**kw_arg)
-        return dataset_
-    elif dataset_name == 'qm9+extBond':
-        return Qm9InMemoryDataset(root='../dataProviders/data', pre_transform=my_pre_transform,
-                                  record_long_range=True, cal_3body_term=True, extended_bond=True,
-                                  edge_version=args.edge_version, cutoff=args.cutoff,
-                                  boundary_factor=args.boundary_factor)
-    elif dataset_name == 'frag9':
-        raise NotImplemented('not implemented')
-    elif dataset_name.split('_')[0] == 'frag9to20':
+def get_test_set(dataset_name, args):
+    if dataset_name == 'conf20':
+        dataset = PhysDimeIMDataset(processed_prefix='conf20', root='../dataProviders/data',
+                                    pre_transform=my_pre_transform,
+                                    infile_dic={'PhysNet': 'conf20_QM_PhysNet.npz', 'SDF': 'conf20_QM.pt'})
+    elif dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
         # convert all to jianing split for consistent split
-        if dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
-            dataset_name = dataset_name.replace('all', 'jianing', 1)
-        dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
-                                                              'pre_transform': my_pre_transform,
-                                                              'record_long_range': True,
-                                                              'type_3_body': 'B',
-                                                              'cal_3body_term': True})
-        dataset_train = dataset(**kw_arg)
-        if args.action != "E":
-            return dataset_train
+        dataset_name = dataset_name.replace('all', 'jianing', 1)
+        dataset_cls, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
+                                                                  'pre_transform': my_pre_transform,
+                                                                  'record_long_range': True,
+                                                                  'type_3_body': 'B',
+                                                                  'cal_3body_term': True})
+        dataset_train = dataset_cls(**kw_arg)
         kw_arg['training_option'] = 'test'
-        return dataset_train, dataset(**kw_arg)
-    elif dataset_name == 'conf20':
-        return PhysDimeIMDataset(processed_prefix='conf20', root='../dataProviders/data', pre_transform=my_pre_transform
-                                 , infile_dic={'PhysNet': 'conf20_QM_PhysNet.npz', 'SDF': 'conf20_QM.pt'})
-    elif dataset_name in ['frag20_eMol9_combine', 'frag20_eMol9_combine_MMFF']:
-        _name = "frag9to20_all" if dataset_name == 'frag20_eMol9_combine' else "frag9to20_all[geometry=MMFF]"
-        return dataset_getter(_name, args)
+        return dataset_train, dataset_cls(**kw_arg)
     else:
-        raise ValueError('Unrecognized dataset: {}'.format(dataset_name))
+        dataset_cls, _kwargs = data_provider_solver(dataset_name, default_kwargs)
+        _kwargs = _add_arg_from_config(_kwargs, args)
+        dataset = dataset_cls(**_kwargs)
+    print("used dataset: {}".format(dataset.processed_file_names))
+    return dataset
+
+    # redirect to train.py dataset getter. It is needed because different dataset share the same test set
+    # if dataset_name.split('_')[0].split('[')[0] == 'qm9':
+    #     dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
+    #                                                           'pre_transform': my_pre_transform,
+    #                                                           'record_long_range': True,
+    #                                                           'type_3_body': 'B',
+    #                                                           'cal_3body_term': True})
+    #     dataset_ = dataset(**kw_arg)
+    #     return dataset_
+    # elif dataset_name == 'qm9+extBond':
+    #     print("please use qm9[extBond=True]")
+    #     return Qm9InMemoryDataset(root='../dataProviders/data', pre_transform=my_pre_transform,
+    #                               record_long_range=True, cal_3body_term=True, extended_bond=True,
+    #                               edge_version=args.edge_version, cutoff=args.cutoff,
+    #                               boundary_factor=args.boundary_factor)
+    # elif dataset_name == 'frag9':
+    #     raise NotImplemented('not implemented')
+    # elif dataset_name.split('_')[0] == 'frag9to20':
+    #     # convert all to jianing split for consistent split
+    #     if dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
+    #         dataset_name = dataset_name.replace('all', 'jianing', 1)
+    #     dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
+    #                                                           'pre_transform': my_pre_transform,
+    #                                                           'record_long_range': True,
+    #                                                           'type_3_body': 'B',
+    #                                                           'cal_3body_term': True})
+    #     dataset_train = dataset(**kw_arg)
+    #     if args.action != "E":
+    #         return dataset_train
+    #     kw_arg['training_option'] = 'test'
+    #     return dataset_train, dataset(**kw_arg)
+    # elif dataset_name in ['frag20_eMol9_combine', 'frag20_eMol9_combine_MMFF']:
+    #     _name = "frag9to20_all" if dataset_name == 'frag20_eMol9_combine' else "frag9to20_all[geometry=MMFF]"
+    #     return get_test_set(_name, args)
+    # else:
+    #     raise ValueError('Unrecognized dataset: {}'.format(dataset_name))
 
 
 def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Loss(reduction='mean'),
@@ -275,7 +296,7 @@ def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Los
         return result, None
     elif args.uncertainty_modify.split('_')[0].split('[')[0] in ['concreteDropoutModule', 'concreteDropoutOutput',
                                                                  'swag']:
-        print("You need to update the code for val_step_new")
+        print("You need to update the code of val_step_new")
         if os.path.exists(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward))):
             print('loading exist files!')
             avg_result = torch.load(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
@@ -352,17 +373,18 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
         test_prefix = args.folder_prefix + '_test_'
 
     if use_exist:
-        test_directory = glob.glob('{}*'.format(test_prefix))[0]
+        test_dir = glob.glob('{}*'.format(test_prefix))[0]
     else:
         current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         folder_dir = osp.dirname(folder_name)
-        test_directory = test_prefix + current_time
-        test_directory = osp.join(folder_dir, test_directory)
-        os.mkdir(test_directory)
+        test_dir = test_prefix + current_time
+        test_dir = osp.join(folder_dir, test_dir)
+        os.mkdir(test_dir)
 
-    shutil.copyfile(os.path.join(folder_name, 'loss_data.pt'), os.path.join(test_directory, 'loss_data.pt'))
+    shutil.copyfile(os.path.join(folder_name, 'loss_data.pt'), os.path.join(test_dir, 'loss_data.pt'))
+    shutil.copy(config_name, test_dir)
 
-    logging.basicConfig(filename=os.path.join(test_directory, "test.log"),
+    logging.basicConfig(filename=os.path.join(test_dir, "test.log"),
                         format='%(asctime)s %(message)s',
                         filemode='w')
     logger = logging.getLogger()
@@ -388,7 +410,7 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
 
                 test_step(args, net, test_data_loader, len(data_provider), loss_fn=loss_fn, mae_fn=mae_fn,
                           mse_fn=mse_fn,
-                          dataset_name='platinum_{}'.format(i), run_dir=test_directory, n_forward=n_forward)
+                          dataset_name='platinum_{}'.format(i), run_dir=test_dir, n_forward=n_forward)
         else:
             test_data = PlatinumTestIMDataSet('../dataProviders/data', pre_transform=my_pre_transform,
                                               sep_heavy_atom=False,
@@ -402,9 +424,9 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             # ------------------------- Absolute Error -------------------------- #
             test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                                  mae_fn=mae_fn, mse_fn=mse_fn,
-                                                 dataset_name='platinum', run_dir=test_directory, n_forward=n_forward)
+                                                 dataset_name='platinum', run_dir=test_dir, n_forward=n_forward)
             E_pred = test_info['E_pred']
-            test_info_analyze(23.061 * E_pred, 23.061 * test_data.data.E[test_index], test_directory, logger)
+            test_info_analyze(23.061 * E_pred, 23.061 * test_data.data.E[test_index], test_dir, logger)
             csv1 = pd.read_csv("../dataProviders/data/raw/Plati20_index_10_13.csv")
             csv2 = pd.read_csv("../dataProviders/data/raw/Plati20_index_14_20.csv")
             mol_batch = torch.cat([torch.as_tensor(csv1["molecule_id"].values).view(-1),
@@ -422,7 +444,7 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             # -------------------------- Relative Error ------------------------- #
             mol_batch = mol_batch[overlap_mask]
             conf_id = conf_id[overlap_mask]
-            E_pred = torch.load(osp.join(test_directory, "loss.pt"))['E_pred'].view(-1)[overlap_mask]
+            E_pred = torch.load(osp.join(test_dir, "loss.pt"))['E_pred'].view(-1)[overlap_mask]
             E_tgt = test_data.data.E.view(-1)[overlap_mask]
             n_mol = mol_batch[-1].item()
             lowest_e_tgt = torch.zeros_like(mol_batch).double()
@@ -453,12 +475,12 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             pin_memory=torch.cuda.is_available(), shuffle=False)
         test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                              mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_directory, n_forward=n_forward)
+                                             run_dir=test_dir, n_forward=n_forward)
         E_pred = test_info['E_pred']
-        test_info_analyze(23.061 * E_pred, 23.061 * _data.data.E[test_index], test_directory, logger)
+        test_info_analyze(23.061 * E_pred, 23.061 * _data.data.E[test_index], test_dir, logger)
     elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20',
                                                       "frag20"]:
-        data_provider = dataset_getter(test_dataset, args)
+        data_provider = get_test_set(test_dataset, args)
         if isinstance(data_provider, tuple):
             data_provider_test = data_provider[1]
             data_provider = data_provider[0]
@@ -478,14 +500,14 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
                 data_provider[torch.as_tensor(val_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
                 pin_memory=torch.cuda.is_available(), shuffle=False)
             test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                      dataset_name='{}_valid'.format(test_dataset), run_dir=test_directory, n_forward=n_forward,
+                      dataset_name='{}_valid'.format(test_dataset), run_dir=test_dir, n_forward=n_forward,
                       action=action)
         test_data_loader = torch.utils.data.DataLoader(
             data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available(), shuffle=False)
         test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                              mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_directory, n_forward=n_forward, action=action)
+                                             run_dir=test_dir, n_forward=n_forward, action=action)
         # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
         #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
         #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
@@ -497,7 +519,7 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             else:
                 E_pred_std = None
             test_info_analyze(23.061 * E_pred, 23.061 * data_provider_test.data.E[test_index],
-                              test_directory, logger, pred_std=E_pred_std, x_forward=x_forward)
+                              test_dir, logger, pred_std=E_pred_std, x_forward=x_forward)
     elif test_dataset.split(':')[0] == 'frag20n9':
         data_provider = Frag9to20MixIMDataset(root='../dataProviders/data', split_settings=uniform_split,
                                               pre_transform=my_pre_transform, frag20n9=True)
@@ -513,16 +535,16 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
                  dataset_name="{} validation set".format(test_dataset))
         test_info = val_step(net, test_data_loader, 500, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
                              dataset_name="{} test set".format(test_dataset), detailed_info=True)
-        test_info_analyze(23.061 * test_info['E_pred'], 23.061 * test_info['E_target'], test_directory, logger)
+        test_info_analyze(23.061 * test_info['E_pred'], 23.061 * test_info['E_target'], test_dir, logger)
     else:
         print('unrecognized test set: {}'.format(test_dataset))
 
     if explicit_test is not None:
         for name in ['diff', 'loss', 'loss_data']:
-            if osp.exists(osp.join(test_directory, '{}.pt'.format(name))):
-                shutil.move(osp.join(test_directory, '{}.pt'.format(name)),
-                            osp.join(test_directory, '{}_{}.pt'.format(name, explicit_test)))
-        shutil.copy(osp.join(test_directory, 'test.log'), osp.join(test_directory, 'test_{}.log'.format(explicit_test)))
+            if osp.exists(osp.join(test_dir, '{}.pt'.format(name))):
+                shutil.move(osp.join(test_dir, '{}.pt'.format(name)),
+                            osp.join(test_dir, '{}_{}.pt'.format(name, explicit_test)))
+        shutil.copy(osp.join(test_dir, 'test.log'), osp.join(test_dir, 'test_{}.log'.format(explicit_test)))
 
     remove_handler(logger)
 

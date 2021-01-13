@@ -2,15 +2,12 @@ import glob
 import sys
 import argparse
 import logging
-import math
 import os
 import os.path as osp
 import shutil
 import time
 from datetime import datetime
-from typing import Union, List
 
-import numpy as np
 import torch
 import torch.cuda
 import torch.utils.data
@@ -26,55 +23,63 @@ from PhysDimeIMDataset import PhysDimeIMDataset
 from qm9InMemoryDataset import Qm9InMemoryDataset
 from utils.Optimizers import EmaAmsGrad, MySGD
 from utils.LossFn import LossFn
-from utils.time_meta import print_function_runtime, record_data
+from utils.time_meta import print_function_runtime
 from utils.utils_functions import device, add_parser_arguments, floating_type, kwargs_solver, get_lr, collate_fn, \
-    load_data_from_index, get_n_params, atom_mean_std, print_val_results, remove_handler, option_solver, mae_fn, mse_fn
+    get_n_params, atom_mean_std, remove_handler, option_solver
+
+default_kwargs = {'root': '../dataProviders/data', 'pre_transform': my_pre_transform, 'record_long_range': True,
+                  'type_3_body': 'B', 'cal_3body_term': True}
 
 
-def data_provider_solver(name, _kw_args):
+def data_provider_solver(name_full, _kw_args):
     """
 
-    :param name:
+    :param name_full: Name should be in a format: ${name_base}[${key}=${value}], all key-value pairs will be feed into
+    data_provider **kwargs
     :param _kw_args:
-    :return:
+    :return: Data Provider Class and kwargs
     """
-    _options = option_solver(name)
-    if "add_sol" in _options.keys():
-        _options["add_sol"] = (_options["add_sol"] == "True")
-    name = name.split('[')[0]
-    for key in _options.keys():
-        _kw_args[key] = _options[key]
+    additional_kwargs = option_solver(name_full)
+    for key in additional_kwargs.keys():
+        '''Converting string into corresponding data type'''
+        if additional_kwargs[key] in ["True", "False"]:
+            additional_kwargs[key] = (additional_kwargs[key] == "True")
+        else:
+            try:
+                additional_kwargs[key] = float(additional_kwargs[key])
+            except ValueError:
+                pass
+    name_base = name_full.split('[')[0]
+    for key in additional_kwargs.keys():
+        _kw_args[key] = additional_kwargs[key]
 
-    settings = name.split('+')[1:] if len(name.split('+')) > 1 else ['']
-    if settings[0] == 'extBond':
-        _kw_args['extended_bond'] = True
-    name = name.split('+')[0]
-    if name == 'qm9':
+    if name_base == 'qm9':
         return Qm9InMemoryDataset, _kw_args
-    elif name.split('_')[0] == 'frag20nHeavy':
-        n_heavy_atom = int(name[7:])
+    elif name_base.split('_')[0] == 'frag20nHeavy':
+        print("Deprecated dataset: {}".format(name_base))
+        n_heavy_atom = int(name_base[7:])
         _kw_args['n_heavy_atom'] = n_heavy_atom
         return Frag20IMDataset, _kw_args
-    elif name[:9] == 'frag9to20':
+    elif name_base[:9] == 'frag9to20':
         _kw_args['training_option'] = 'train'
-        argument = name[10:]
-        if argument == 'uniform':
+        split = name_base[10:]
+        if split == 'uniform':
             _kw_args['split_settings'] = uniform_split
-        elif argument == 'small':
+        elif split == 'small':
             _kw_args['split_settings'] = small_split
-        elif argument == 'large':
+        elif split == 'large':
             _kw_args['split_settings'] = large_split
-        elif argument == 'all':
+        elif split == 'all':
             _kw_args['split_settings'] = uniform_split
             _kw_args['all_data'] = True
-        elif argument == 'jianing':
+        elif split == 'jianing':
             _kw_args['split_settings'] = uniform_split
             _kw_args['jianing_split'] = True
         else:
-            raise ValueError('not recognized argument: {}'.format(argument))
+            raise ValueError('not recognized argument: {}'.format(split))
         return Frag9to20MixIMDataset, _kw_args
-    elif name in ['frag20_eMol9_combine', 'frag20_eMol9_combine_MMFF']:
-        geometry = "MMFF" if name == 'frag20_eMol9_combine_MMFF' else "QM"
+    elif name_base in ['frag20_eMol9_combine', 'frag20_eMol9_combine_MMFF']:
+        geometry = "MMFF" if name_base == 'frag20_eMol9_combine_MMFF' else "QM"
         frag20dataset, tmp_args = data_provider_solver('frag9to20_all', _kw_args)
         frag20dataset = frag20dataset(**tmp_args, geometry=geometry)
         len_frag20 = len(frag20dataset)
@@ -94,25 +99,25 @@ def data_provider_solver(name, _kw_args):
         _kw_args['dataset_list'] = [frag20dataset, e_mol9_dataset]
         return CombinedIMDataset, _kw_args
     else:
-        raise ValueError('Unrecognized dataset name: {} !'.format(name))
+        raise ValueError('Unrecognized dataset name: {} !'.format(name_base))
 
 
 def train_step(model, _optimizer, data_batch, loss_fn, max_norm, warm_up_scheduler):
     # torch.cuda.synchronize()
     # t0 = time.time()
+    with torch.autograd.set_detect_anomaly(True):
+        model.train()
+        _optimizer.zero_grad()
 
-    model.train()
-    _optimizer.zero_grad()
+        E_pred, F_pred, Q_pred, p_pred, loss_nh = model(data_batch)
 
-    E_pred, F_pred, Q_pred, p_pred, loss_nh = model(data_batch)
+        # t0 = record_data('forward', t0, True)
 
-    # t0 = record_data('forward', t0, True)
+        loss = loss_fn(E_pred, F_pred, Q_pred, p_pred, data_batch) + loss_nh
 
-    loss = loss_fn(E_pred, F_pred, Q_pred, p_pred, data_batch) + loss_nh
+        # print("Training b4 backward: {:.2f} MB".format(torch.cuda.memory_allocated(device) * 1e-6))
 
-    # print("Training b4 backward: {:.2f} MB".format(torch.cuda.memory_allocated(device) * 1e-6))
-
-    loss.backward()
+        loss.backward()
 
     # print("Training after backward: {:.2f} MB".format(torch.cuda.memory_allocated(device) * 1e-6))
 
@@ -128,71 +133,6 @@ def train_step(model, _optimizer, data_batch, loss_fn, max_norm, warm_up_schedul
     result_loss = loss.data[0]
 
     return result_loss
-
-
-def val_step(model, _data_loader, data_size, loss_fn, mae_fn, mse_fn, dataset_name='dataset', detailed_info=False,
-             print_to_log=True, action: Union[List[str], str] = "E"):
-    # TODO Deprecated, planning to write a new one
-    model.eval()
-    loss, emae, emse, fmae, fmse, qmae, qmse, pmae, pmse = 0, 0, 0, 0, 0, 0, 0, 0, 0
-
-    if detailed_info:
-        E_pred_aggr = torch.zeros(data_size).cpu().type(floating_type)
-        Q_pred_aggr = torch.zeros_like(E_pred_aggr)
-        D_pred_aggr = torch.zeros(data_size, 3).cpu().type(floating_type)
-        idx_before = 0
-    else:
-        E_pred_aggr, Q_pred_aggr, D_pred_aggr, idx_before = None, None, None, None
-
-    for val_data in _data_loader:
-        _batch_size = len(val_data.E)
-
-        E_pred, F_pred, Q_pred, D_pred, loss_nh = model(val_data)
-
-        # IMPORTANT the .item() function is necessary here, otherwise the graph will be unintentionally stored and
-        # never be released
-        # And you will run out of memory after several val()
-        loss1 = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data).item()
-        loss2 = loss_nh.item()
-        loss += _batch_size * (loss1 + loss2)
-
-        emae += _batch_size * mae_fn(E_pred, getattr(val_data, action).to(device)).item()
-        emse += _batch_size * mse_fn(E_pred, getattr(val_data, action).to(device)).item()
-
-        if Q_pred is not None:
-            qmae += _batch_size * mae_fn(Q_pred, val_data.Q.to(device)).item()
-            qmse += _batch_size * mse_fn(Q_pred, val_data.Q.to(device)).item()
-
-            pmae += _batch_size * mae_fn(D_pred, val_data.D.to(device)).item()
-            pmse += _batch_size * mse_fn(D_pred, val_data.D.to(device)).item()
-
-        if detailed_info:
-            for aggr, pred in zip([E_pred_aggr, Q_pred_aggr, D_pred_aggr], [E_pred, Q_pred, D_pred]):
-                if pred is not None:
-                    aggr[idx_before: _batch_size + idx_before] = pred.detach().cpu()
-                # aggr[idx_before: _batch_size + idx_before] = val_data.E.detach().cpu().view(-1)
-            idx_before = idx_before + _batch_size
-
-    loss = loss / data_size
-    emae = emae / data_size
-    ermse = math.sqrt(emse / data_size)
-    qmae = qmae / data_size
-    qrmse = math.sqrt(qmse / data_size)
-    pmae = pmae / data_size
-    prmse = math.sqrt(pmse / data_size)
-
-    if print_to_log:
-        log_info = print_val_results(dataset_name, loss, emae, ermse, qmae, qrmse, pmae, prmse)
-        logging.info(log_info)
-
-    result = {'loss': loss, 'emae': emae, 'ermse': ermse, 'qmae': qmae, 'qrmse': qrmse, 'pmae': pmae, 'prmse': prmse}
-
-    if detailed_info:
-        result['E_pred'] = E_pred_aggr
-        result['Q_pred'] = Q_pred_aggr
-        result['D_pred'] = D_pred_aggr
-
-    return result
 
 
 def val_step_new(model, _data_loader, loss_fn):
@@ -219,14 +159,15 @@ def val_step_new(model, _data_loader, loss_fn):
 
 
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
+    # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
 
     debug_mode = (config_args.debug_mode.lower() == 'true')
     use_trained_model = (config_args.use_trained_model.lower() != 'false')
     use_swag = (config_args.uncertainty_modify.split('_')[0] == 'swag')
 
+    # ----------------- set up run directory -------------------- #
     while True:
-        # set up run directory
         current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         run_directory = config_args.folder_prefix + '_run_' + current_time
         if not os.path.exists(run_directory):
@@ -237,16 +178,17 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
 
     shutil.copyfile(config_args.config_name, os.path.join(run_directory, config_args.config_name))
 
-    # Logger setup
+    # --------------------- Logger setup ---------------------------- #
     logging.basicConfig(filename=os.path.join(run_directory, config_args.log_file_name),
                         format='%(asctime)s %(message)s',
                         filemode='w')
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
-    # Meta data file set up
+    # -------------------- Meta data file set up -------------------- #
     meta_data_name = os.path.join(run_directory, 'meta.txt')
 
+    # -------------- Index file and remove specific atoms ------------ #
     if explicit_split is not None:
         train_index, val_index, test_index = explicit_split
     else:
@@ -277,11 +219,12 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     w_e, w_f, w_q, w_p = 1., config_args.force_weight, config_args.charge_weight, config_args.dipole_weight
     loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_args.action)
 
-    # ###################################Setting up model and optimizer############################################# #
+    # ------------------- Setting up model and optimizer ------------------ #
     # Normalization of PhysNet atom-wise prediction
     if config_args.action == "E":
         mean_atom, std_atom = atom_mean_std(getattr(data_provider.data, config_args.action),
                                             data_provider.data.N, train_index)
+        mean_atom = mean_atom.item()
     elif isinstance(config_args.action, list):
         mean_atom = []
         std_atom = []
@@ -326,8 +269,10 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         else:
             net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'best_model.pt'), map_location=device),
                                 strict=False)
-        shadow_net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'best_model.pt'), map_location=device),
-                                   strict=False)
+        incompatible_keys = shadow_net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'best_model.pt'),
+                                                                  map_location=device), strict=False)
+        logger.info("---------incompatible keys-----------")
+        logger.info(str(incompatible_keys))
     else:
         trained_model_dir = None
 
@@ -356,7 +301,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     warm_up_scheduler = GradualWarmupScheduler(optimizer, multiplier=1.0, total_epoch=config_args.warm_up_steps,
                                                after_scheduler=scheduler) if config_args.warm_up_steps > 0 else scheduler
 
-    # ###################################Printing meta data############################################# #
+    # --------------------- Printing meta data ---------------------- #
     if torch.cuda.is_available():
         logger.info('device name: ' + torch.cuda.get_device_name(device))
         logger.info("Cuda mem allocated: {:.2f} MB".format(torch.cuda.memory_allocated(device) * 1e-6))
@@ -373,15 +318,26 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         for _key in net_kwargs.keys():
             f.write("{} = {}\n".format(_key, net_kwargs[_key]))
 
-    # ###################################Training############################################# #
+    # ---------------------- Training ----------------------- #
     logger.info('start training...')
-    with open(osp.join(run_directory, "loss_data.csv"), "w") as f:
-        f.write("epoch,train_loss,valid_loss,time\n")
 
     shadow_net = optimizer.shadow_model
+    t0 = time.time()
     val_loss = val_step_new(shadow_net, val_data_loader, loss_fn)
+
     with open(osp.join(run_directory, "loss_data.csv"), "a") as f:
-        f.write("0,-1,{},{}\n".format(val_loss["loss"], time.time()))
+        f.write("epoch,train_loss,valid_loss,delta_time")
+        for key in val_loss.keys():
+            if key != "loss":
+                f.write(",{}".format(key))
+        f.write("\n")
+
+        f.write("0,-1,{},{}".format(val_loss["loss"], time.time()-t0))
+        for key in val_loss.keys():
+            if key != "loss":
+                f.write(",{}".format(val_loss[key]))
+        f.write("\n")
+        t0 = time.time()
     best_loss = val_loss['loss']
 
     logger.info('Init lr: {}'.format(get_lr(optimizer)))
@@ -403,14 +359,16 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         shadow_net = optimizer.shadow_model
         val_loss = val_step_new(shadow_net, val_data_loader, loss_fn)
 
-        _loss_data_this_epoch = {'epoch': epoch,
-                                 't_loss': train_loss,
-                                 'v_loss': val_loss['loss'],
-                                 'time': time.time()}.update(val_loss)
+        _loss_data_this_epoch = {'epoch': epoch, 't_loss': train_loss, 'v_loss': val_loss['loss'], 'time': time.time()}
+        _loss_data_this_epoch.update(val_loss)
         loss_data.append(_loss_data_this_epoch)
         torch.save(loss_data, os.path.join(run_directory, 'loss_data.pt'))
         with open(osp.join(run_directory, "loss_data.csv"), "a") as f:
-            f.write("{},{},{},{}\n".format(epoch, train_loss, val_loss["loss"], time.time()))
+            f.write("{},{},{},{}".format(epoch, train_loss, val_loss["loss"], time.time()-t0))
+            for key in val_loss.keys():
+                if key != "loss":
+                    f.write(",{}".format(val_loss[key]))
+            f.write("\n")
         if use_swag:
             start, freq = config_args.uncertainty_modify.split('_')[1], config_args.uncertainty_modify.split('_')[2]
             if epoch > int(start) and (epoch % int(freq) == 0):
@@ -458,9 +416,7 @@ def main():
     if args.action == "names":
         args.action = args.target_names
 
-    _kwargs = {'root': '../dataProviders/data', 'pre_transform': my_pre_transform, 'record_long_range': True,
-               'type_3_body': 'B', 'cal_3body_term': True}
-    data_provider_class, _kwargs = data_provider_solver(args.data_provider, _kwargs)
+    data_provider_class, _kwargs = data_provider_solver(args.data_provider, default_kwargs)
     _kwargs = _add_arg_from_config(_kwargs, args)
     data_provider = data_provider_class(**_kwargs)
     train(args, data_provider)
