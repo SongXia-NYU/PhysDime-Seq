@@ -162,7 +162,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
     config_dict = vars(config_args)
-    for bool_key in ["debug_mode", "use_trained_model", "auto_sol", "reset_optimizer"]:
+    for bool_key in ["debug_mode", "use_trained_model", "auto_sol", "reset_optimizer", "target_nodes"]:
         config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
     config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
 
@@ -258,7 +258,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     else:
         swag_model = None
 
-    # retrain model
+    # restore pretrained model
     if config_dict["use_trained_model"]:
         trained_model_dir = glob.glob(config_dict["use_trained_model"])[0]
         logger.info('using trained model: {}'.format(config_dict["use_trained_model"]))

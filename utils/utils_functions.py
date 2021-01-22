@@ -412,9 +412,10 @@ def _cal_dim(key):
     return -1 if re.search("index", key) else 0
 
 
-def collate_fn(data_list, clone=False):
+def collate_fn(data_list, clone=False, n_extra_node=0):
     """
     Note: using clone here, maybe not efficient
+    :param n_extra_node:
     :param clone:
     :param data_list:
     :return:
@@ -427,6 +428,10 @@ def collate_fn(data_list, clone=False):
     batch = torch_geometric.data.Data()
     batch_size = len(data_list)
     keys = data_list[0].keys
+
+    if n_extra_node > 0:
+        pass
+
     for key in keys:
         batch[key] = torch.cat([data_list[i][key] for i in range(batch_size)], dim=_cal_dim(key))
 
@@ -715,7 +720,10 @@ def add_parser_arguments(parser):
     parser.add_argument("--target_names", type=str, action="append", default=[],
                         help="For Frag20-solvation: gasEnergy | watEnergy | octEnergy | CalcSol | OctSol")
     parser.add_argument("--auto_sol", type=str, default="False",
-                        help="Automatic calculate solvation energy by subtracting solvent energy by gas energy")
+                        help="Automatic calculate solvation energy by subtracting solvent energy by gas energy.")
+    parser.add_argument("--target_nodes", type=str, default="False",
+                        help="Add extra nodes (fake atoms) for each target, the result of each target will be the "
+                             "aggregated repr of each node.")
     return parser
 
 

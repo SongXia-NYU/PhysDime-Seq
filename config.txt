@@ -13,7 +13,7 @@
 --n_bi_linear=8
 --num_epochs=1000
 --warm_up_steps=0
---data_provider=frag9to20_all[add_sol=True]
+--data_provider=qm9
 --test_interval=-1
 --learning_rate=0.0033
 --ema_decay=0.999
@@ -37,11 +37,6 @@
 --boundary_factor=100.
 --folder_prefix=exp224
 --comment=PhysNet for all properties prediction
---n_output=5
---action=names
---target_names=gasEnergy
---target_names=watEnergy
---target_names=octEnergy
---target_names=CalcSol
---target_names=CalcOct
+--n_output=2
+--action=E
 --remove_atom_ids=-1
