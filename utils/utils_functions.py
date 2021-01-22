@@ -712,7 +712,10 @@ def add_parser_arguments(parser):
                                                                 "predictions.")
     parser.add_argument("--action", type=str, default="E", help="name of target, must be consistent with name in"
                                                                 "data_provider, default E is for PhysNet energy")
-    parser.add_argument("--target_names", type=str, action="append", default=[])
+    parser.add_argument("--target_names", type=str, action="append", default=[],
+                        help="For Frag20-solvation: gasEnergy | watEnergy | octEnergy | CalcSol | OctSol")
+    parser.add_argument("--auto_sol", type=str, default="False",
+                        help="Automatic calculate solvation energy by subtracting solvent energy by gas energy")
     return parser
 
 

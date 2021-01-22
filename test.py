@@ -248,7 +248,6 @@ def get_test_set(dataset_name, args):
         dataset = dataset_cls(**_kwargs)
     print("used dataset: {}".format(dataset.processed_file_names))
     return dataset
-
     # redirect to train.py dataset getter. It is needed because different dataset share the same test set
     # if dataset_name.split('_')[0].split('[')[0] == 'qm9':
     #     dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
@@ -362,7 +361,7 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
     w_e, w_f, w_q, w_p = 1, args.force_weight, args.charge_weight, args.dipole_weight
 
     action = args.target_names if args.action != "E" else "E"
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=action)
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=action, auto_sol=("gasEnergy" in action))
 
     mae_fn = torch.nn.L1Loss(reduction='mean')
     mse_fn = torch.nn.MSELoss(reduction='mean')

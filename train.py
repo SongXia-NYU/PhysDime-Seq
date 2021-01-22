@@ -161,25 +161,25 @@ def val_step_new(model, _data_loader, loss_fn):
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
-
-    debug_mode = (config_args.debug_mode.lower() == 'true')
-    use_trained_model = (config_args.use_trained_model.lower() != 'false')
-    use_swag = (config_args.uncertainty_modify.split('_')[0] == 'swag')
+    config_dict = vars(config_args)
+    for bool_key in ["debug_mode", "use_trained_model", "auto_sol", "reset_optimizer"]:
+        config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
+    config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
 
     # ----------------- set up run directory -------------------- #
     while True:
         current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-        run_directory = config_args.folder_prefix + '_run_' + current_time
+        run_directory = config_dict["folder_prefix"] + '_run_' + current_time
         if not os.path.exists(run_directory):
             os.mkdir(run_directory)
             break
         else:
             time.sleep(10)
 
-    shutil.copyfile(config_args.config_name, os.path.join(run_directory, config_args.config_name))
+    shutil.copyfile(config_dict["config_name"], os.path.join(run_directory, config_dict["config_name"]))
 
     # --------------------- Logger setup ---------------------------- #
-    logging.basicConfig(filename=os.path.join(run_directory, config_args.log_file_name),
+    logging.basicConfig(filename=os.path.join(run_directory, config_dict["log_file_name"]),
                         format='%(asctime)s %(message)s',
                         filemode='w')
     logger = logging.getLogger()
@@ -193,51 +193,51 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         train_index, val_index, test_index = explicit_split
     else:
         train_index, val_index, test_index = data_provider.train_index, data_provider.val_index, data_provider.test_index
-        if config_args.remove_atom_ids > 0:
+        if config_dict["remove_atom_ids"] > 0:
             # remove B atom from dataset
-            train_index, val_index, test_index = remove_atom_from_dataset(config_args.remove_atom_ids, data_provider,
+            train_index, val_index, test_index = remove_atom_from_dataset(config_dict["remove_atom_ids"], data_provider,
                                                                           remove_split=('train', 'valid'),
                                                                           explicit_split=(
                                                                               train_index, val_index, test_index))
-        logger.info('REMOVING ATOM {} FROM DATASET'.format(config_args.remove_atom_ids))
-        print('REMOVING ATOM {} FROM DATASET'.format(config_args.remove_atom_ids))
+        logger.info('REMOVING ATOM {} FROM DATASET'.format(config_dict["remove_atom_ids"]))
+        print('REMOVING ATOM {} FROM DATASET'.format(config_dict["remove_atom_ids"]))
 
     train_size = len(train_index)
     val_size = len(val_index)
     logger.info('train size: ' + str(train_size))
     logger.info('validation size: ' + str(val_size))
-    num_train_batches = train_size // config_args.batch_size + 1
+    num_train_batches = train_size // config_dict["batch_size"] + 1
 
     train_data_loader = torch.utils.data.DataLoader(
-        data_provider[torch.as_tensor(train_index)], batch_size=config_args.batch_size, collate_fn=collate_fn,
+        data_provider[torch.as_tensor(train_index)], batch_size=config_dict["batch_size"], collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(), shuffle=True)
 
     val_data_loader = torch.utils.data.DataLoader(
-        data_provider[torch.as_tensor(val_index)], batch_size=config_args.valid_batch_size, collate_fn=collate_fn,
+        data_provider[torch.as_tensor(val_index)], batch_size=config_dict["valid_batch_size"], collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(), shuffle=True)
 
-    w_e, w_f, w_q, w_p = 1., config_args.force_weight, config_args.charge_weight, config_args.dipole_weight
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_args.action)
+    w_e, w_f, w_q, w_p = 1., config_dict["force_weight"], config_dict["charge_weight"], config_dict["dipole_weight"]
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_dict["action"], auto_sol=config_dict["auto_sol"])
 
     # ------------------- Setting up model and optimizer ------------------ #
     # Normalization of PhysNet atom-wise prediction
-    if config_args.action == "E":
-        mean_atom, std_atom = atom_mean_std(getattr(data_provider.data, config_args.action),
+    if config_dict["action"] == "E":
+        mean_atom, std_atom = atom_mean_std(getattr(data_provider.data, config_dict["action"]),
                                             data_provider.data.N, train_index)
         mean_atom = mean_atom.item()
-    elif isinstance(config_args.action, list):
+    elif isinstance(config_dict["action"], list):
         mean_atom = []
         std_atom = []
-        for name in config_args.action:
+        for name in config_dict["action"]:
             this_mean, this_std = atom_mean_std(getattr(data_provider.data, name), data_provider.data.N, train_index)
             mean_atom.append(this_mean)
             std_atom.append(this_std)
         mean_atom = torch.as_tensor(mean_atom)
         std_atom = torch.as_tensor(std_atom)
-    elif config_args.action == "solubility":
+    elif config_dict["action"] == "solubility":
         raise NotImplemented
     else:
-        raise ValueError("Invalid action: {}".format(config_args.action))
+        raise ValueError("Invalid action: {}".format(config_dict["action"]))
     E_atomic_scale = std_atom
     E_atomic_shift = mean_atom
 
@@ -252,16 +252,16 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     shadow_net = shadow_net.type(floating_type)
     shadow_net.load_state_dict(net.state_dict())
 
-    if use_swag:
+    if config_dict["use_swag"]:
         dummy_model = PhysDimeNet(**net_kwargs).to(device).type(floating_type)
         swag_model = SWAG(dummy_model, no_cov_mat=False, max_num_models=20)
     else:
         swag_model = None
 
     # retrain model
-    if use_trained_model:
-        trained_model_dir = glob.glob(config_args.use_trained_model)[0]
-        logger.info('using trained model: {}'.format(config_args.use_trained_model))
+    if config_dict["use_trained_model"]:
+        trained_model_dir = glob.glob(config_dict["use_trained_model"])[0]
+        logger.info('using trained model: {}'.format(config_dict["use_trained_model"]))
 
         if os.path.exists(os.path.join(trained_model_dir, 'training_model.pt')):
             net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'training_model.pt'), map_location=device),
@@ -277,29 +277,30 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         trained_model_dir = None
 
     # model freeze options (transfer learning)
-    if config_args.freeze_option == 'prev':
+    if config_dict["freeze_option"] == 'prev':
         net.freeze_prev_layers(freeze_extra=False)
-    elif config_args.freeze_option == 'prev_extra':
+    elif config_dict["freeze_option"] == 'prev_extra':
         net.freeze_prev_layers(freeze_extra=True)
-    elif config_args.freeze_option == 'none':
+    elif config_dict["freeze_option"] == 'none':
         pass
     else:
-        raise ValueError('Invalid freeze option: {}'.format(config_args.freeze_option))
+        raise ValueError('Invalid freeze option: {}'.format(config_dict["freeze_option"]))
 
     # optimizers
-    if config_args.optimizer.split('_')[0] == 'emaAms':
-        optimizer = EmaAmsGrad(net.parameters(), shadow_net, lr=config_args.learning_rate,
-                               ema=float(config_args.optimizer.split('_')[1]))
-    elif config_args.optimizer.split('_')[0] == 'sgd':
-        optimizer = MySGD(net, lr=config_args.learning_rate)
+    if config_dict["optimizer"].split('_')[0] == 'emaAms':
+        optimizer = EmaAmsGrad(net.parameters(), shadow_net, lr=config_dict["learning_rate"],
+                               ema=float(config_dict["optimizer"].split('_')[1]))
+    elif config_dict["optimizer"].split('_')[0] == 'sgd':
+        optimizer = MySGD(net, lr=config_dict["learning_rate"])
     else:
-        raise ValueError('Unrecognized optimizer: {}'.format(config_args.optimizer))
-    if use_trained_model and (config_args.reset_optimizer.lower() == 'false'):
+        raise ValueError('Unrecognized optimizer: {}'.format(config_dict["optimizer"]))
+    if config_dict["use_trained_model"] and (not config_dict["reset_optimizer"]):
         if os.path.exists(os.path.join(trained_model_dir, "best_model_optimizer.pt")):
             optimizer.load_state_dict(torch.load(os.path.join(trained_model_dir, "best_model_optimizer.pt")))
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, config_args.decay_steps, gamma=0.1)
-    warm_up_scheduler = GradualWarmupScheduler(optimizer, multiplier=1.0, total_epoch=config_args.warm_up_steps,
-                                               after_scheduler=scheduler) if config_args.warm_up_steps > 0 else scheduler
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, config_dict["decay_steps"], gamma=0.1)
+    warm_up_scheduler = GradualWarmupScheduler(
+        optimizer, multiplier=1.0, total_epoch=config_dict["warm_up_steps"], after_scheduler=scheduler) \
+        if config_dict["warm_up_steps"] > 0 else scheduler
 
     # --------------------- Printing meta data ---------------------- #
     if torch.cuda.is_available():
@@ -343,16 +344,16 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     logger.info('Init lr: {}'.format(get_lr(optimizer)))
     loss_data = []
     early_stop_count = 0
-    for epoch in range(config_args.num_epochs):
+    for epoch in range(config_dict["num_epochs"]):
         train_loss = 0.
         for batch_num, data in enumerate(train_data_loader):
             this_size = data.E.shape[0]
 
             train_loss += train_step(net, _optimizer=optimizer, data_batch=data, loss_fn=loss_fn,
-                                     max_norm=config_args.max_norm,
+                                     max_norm=config_dict["max_norm"],
                                      warm_up_scheduler=warm_up_scheduler) * this_size / train_size
 
-            if debug_mode & ((batch_num + 1) % 600 == 0):
+            if config_dict["debug_mode"] & ((batch_num + 1) % 600 == 0):
                 logger.info("Batch num: {}/{}, train loss: {} ".format(batch_num, num_train_batches, train_loss))
 
         logger.info('epoch {} ended, learning rate: {} '.format(epoch, get_lr(optimizer)))
@@ -369,8 +370,8 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
                 if key != "loss":
                     f.write(",{}".format(val_loss[key]))
             f.write("\n")
-        if use_swag:
-            start, freq = config_args.uncertainty_modify.split('_')[1], config_args.uncertainty_modify.split('_')[2]
+        if config_dict["use_swag"]:
+            start, freq = config_dict["uncertainty_modify"].split('_')[1], config_dict["uncertainty_modify"].split('_')[2]
             if epoch > int(start) and (epoch % int(freq) == 0):
                 swag_model.collect_model(shadow_net)
                 torch.save(swag_model.state_dict(), os.path.join(run_directory, 'swag_model.pt'))
@@ -382,7 +383,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
             torch.save(optimizer.state_dict(), os.path.join(run_directory, 'best_model_optimizer.pt'))
         else:
             early_stop_count += 1
-            if early_stop_count == config_args.early_stop:
+            if early_stop_count == config_dict["early_stop"]:
                 logger.info('early stop at epoch {}.'.format(epoch))
                 break
 

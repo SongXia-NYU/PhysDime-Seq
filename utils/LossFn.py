@@ -1,24 +1,44 @@
 import torch
 from typing import Union, List
+from copy import deepcopy
 import torch_geometric
 
-from utils.utils_functions import device, mae_fn, mse_fn
+from utils.utils_functions import device, mae_fn, mse_fn, kcal2ev
 
 
 class LossFn:
-    def __init__(self, w_e, w_f, w_q, w_p, action: Union[List[str], str] = "E"):
-        # TODO return more detailed loss: MAE, MSE
-        self.action = action
+    def __init__(self, w_e, w_f, w_q, w_p, action: Union[List[str], str] = "E", auto_sol=False):
+        self.action = deepcopy(action)
         self.w_e = w_e
         self.w_f = w_f
         self.w_q = w_q
         self.w_p = w_p
+        self.auto_sol = auto_sol
+        if self.auto_sol:
+            assert "gasEnergy" in self.action
+            if "watEnergy" in self.action:
+                self.action.append("CalcSol")
+            if "octEnergy" in self.action:
+                self.action.append("CalcOct")
 
     def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, requires_detail=False):
         if isinstance(self.action, list):
+            '''
+            Solvation energy is in kcal/mol but gas/water/octanol energy is in eV
+            '''
             # multi-task prediction
+            if self.auto_sol:
+                total_pred = [E_pred]
+                gas_id = self.action.index("gasEnergy")
+                for sol_name in ["watEnergy", "octEnergy"]:
+                    if sol_name in self.action:
+                        sol_id = self.action.index(sol_name)
+                        total_pred.append((E_pred[:, sol_id] - E_pred[:, gas_id]).view(-1, 1)/kcal2ev)
+                E_pred = torch.cat(total_pred, dim=-1)
+
             assert E_pred.shape[-1] == len(self.action)
             tgt = torch.cat([getattr(data, name).view(-1, 1) for name in self.action], dim=-1)
+
             mae_loss = torch.mean(torch.abs(E_pred - tgt), dim=0, keepdim=True)
             rmse_loss = torch.sqrt(torch.mean((E_pred - tgt)**2, dim=0, keepdim=True))
             if requires_detail:
@@ -47,7 +67,5 @@ class LossFn:
                                                            "MAE_Q": Q_loss.item(), "MAE_D": D_loss.item()}
             else:
                 return E_loss + F_loss + Q_loss + D_loss
-        elif self.action == "solubility":
-            pass
         else:
             raise ValueError("Invalid action: {}".format(self.action))
