@@ -429,6 +429,10 @@ def collate_fn(data_list, clone=False, n_extra_node=0):
     batch_size = len(data_list)
     keys = data_list[0].keys
 
+    # InChI is not needed during training
+    if "InChI" in keys:
+        keys.remove("InChI")
+
     if n_extra_node > 0:
         pass
 
@@ -734,6 +738,10 @@ def remove_handler(log):
 
 
 if __name__ == '__main__':
-    map = [True] * 32 * 6
-    map[3] = False
-    print(get_batch(map, 32, 6))
+    _x_s = torch.arange(0.005, 1., 0.005)
+    _rbf = [gaussian_rbf(_x, torch.arange(0.05, 1, 0.1), torch.as_tensor(25.), torch.as_tensor(1.)).view(1, -1) for _x in _x_s]
+    _rbf = torch.cat(_rbf, dim=0)
+    import matplotlib.pyplot as plt
+    plt.plot(_x_s, _rbf, color='black')
+    plt.show()
+    print("finished")

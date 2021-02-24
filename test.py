@@ -227,11 +227,12 @@ def test_info_analyze(pred, target, test_dir, logger=None, name='Energy', thresh
 
 
 def get_test_set(dataset_name, args):
+    _, arg_in_name = data_provider_solver(dataset_name, {})
     if dataset_name == 'conf20':
         dataset = PhysDimeIMDataset(processed_prefix='conf20', root='../dataProviders/data',
                                     pre_transform=my_pre_transform,
                                     infile_dic={'PhysNet': 'conf20_QM_PhysNet.npz', 'SDF': 'conf20_QM.pt'})
-    elif dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
+    elif dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E" and (not arg_in_name["add_sol"]):
         # convert all to jianing split for consistent split
         dataset_name = dataset_name.replace('all', 'jianing', 1)
         dataset_cls, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
@@ -324,7 +325,7 @@ def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Los
         raise ValueError('unrecognized uncertainty_modify: {}'.format(args.uncertainty_modify))
 
 
-def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, use_exist=False, check_active=False):
+def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist=False, check_active=False):
     if folder_name.find('active') >= 0 and check_active:
         cycle_folders = glob.glob(osp.join(folder_name, 'cycle*_run_*'))
         for ele in cycle_folders:
@@ -339,6 +340,8 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
         print('WARNING!!!!! Using explicit test set: {}'.format(explicit_test))
     config_name = os.path.join(folder_name, 'config*.txt')
     config_name = glob.glob(config_name)[0]
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@')
+    parser = add_parser_arguments(parser)
     args, unknown = parser.parse_known_args(["@" + config_name])
     inferred_prefix = folder_name.split('_run_')[0]
     if args.folder_prefix != inferred_prefix:
@@ -393,6 +396,8 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
         test_dataset = explicit_test
     else:
         test_dataset = args.data_provider
+
+    logger.info("dataset in args: {}".format(test_dataset))
 
     if test_dataset == 'platinum':
         sep_heavy_atom = False
@@ -477,8 +482,7 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
                                              run_dir=test_dir, n_forward=n_forward)
         E_pred = test_info['E_pred']
         test_info_analyze(23.061 * E_pred, 23.061 * _data.data.E[test_index], test_dir, logger)
-    elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20',
-                                                      "frag20"]:
+    elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20', "frag20"]:
         data_provider = get_test_set(test_dataset, args)
         if isinstance(data_provider, tuple):
             data_provider_test = data_provider[1]
@@ -487,10 +491,13 @@ def test_folder(folder_name, n_forward, parser, x_forward, explicit_test=None, u
             data_provider_test = data_provider
         val_index = data_provider.val_index
         test_index = data_provider_test.test_index
+        logger.info("dataset: {}".format(data_provider.processed_file_names))
+        logger.info("valid size: {}".format(len(val_index)))
+        logger.info("test size: {}".format(len(test_index)))
         if args.remove_atom_ids > 0:
             _, val_index, _ = remove_atom_from_dataset(args.remove_atom_ids, data_provider, ("valid",),
                                                        (None, val_index, None))
-            print('removing B from test dataset...')
+            logger.info('removing B from test dataset...')
             _, _, test_index = remove_atom_from_dataset(args.remove_atom_ids, data_provider_test, ('test',),
                                                         (None, None, test_index))
 
@@ -571,11 +578,11 @@ def test_all():
     parser.add_argument('--use_exist', action="store_true")
     _args = parser.parse_args()
 
-    folder_names = glob.glob(_args.folder_names)
+    run_dirs = glob.glob(_args.folder_names)
 
-    for name in folder_names:
+    for name in run_dirs:
         print('testing folder: {}'.format(name))
-        test_folder(name, _args.n_forward, parser, _args.x_forward, _args.explicit_test, _args.use_exist)
+        test_folder(name, _args.n_forward, _args.x_forward, _args.explicit_test, _args.use_exist)
 
 
 # def uncertainty_figure(run_dir):

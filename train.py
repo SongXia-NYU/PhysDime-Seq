@@ -6,6 +6,7 @@ import os
 import os.path as osp
 import shutil
 import time
+from copy import copy
 from datetime import datetime
 
 import torch
@@ -146,11 +147,15 @@ def val_step_new(model, _data_loader, loss_fn):
         aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data, requires_detail=True)
         loss += aggr_loss.item() * _batch_size
         valid_size += _batch_size
+
         if detail is None:
-            detail = loss_detail
-        else:
+            # -----init------ #
+            detail = copy(loss_detail)
             for key in detail:
-                detail[key] += loss_detail[key] * _batch_size
+                detail[key] = 0.
+
+        for key in detail:
+            detail[key] += loss_detail[key] * _batch_size
     loss /= valid_size
     for key in detail:
         detail[key] /= valid_size
@@ -162,8 +167,10 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
     config_dict = vars(config_args)
-    for bool_key in ["debug_mode", "use_trained_model", "auto_sol", "reset_optimizer", "target_nodes"]:
+    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes"]:
         config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
+    config_dict["use_trained_model"] = config_dict["use_trained_model"]\
+        if config_dict["use_trained_model"].lower() != "false" else False
     config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
 
     # ----------------- set up run directory -------------------- #
@@ -366,6 +373,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
         torch.save(loss_data, os.path.join(run_directory, 'loss_data.pt'))
         with open(osp.join(run_directory, "loss_data.csv"), "a") as f:
             f.write("{},{},{},{}".format(epoch, train_loss, val_loss["loss"], time.time()-t0))
+            t0 = time.time()
             for key in val_loss.keys():
                 if key != "loss":
                     f.write(",{}".format(val_loss[key]))
