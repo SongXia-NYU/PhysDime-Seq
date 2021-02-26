@@ -164,6 +164,9 @@ def val_step_new(model, _data_loader, loss_fn):
 
 
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
+    if config_args.action == "names":
+        config_args.action = config_args.target_names
+
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
     config_dict = vars(config_args)
@@ -422,8 +425,6 @@ def main():
         config_name = args.config_name
         args, unknown = parser.parse_known_args(["@" + config_name])
     args.config_name = config_name
-    if args.action == "names":
-        args.action = args.target_names
 
     data_provider_class, _kwargs = data_provider_solver(args.data_provider, default_kwargs)
     _kwargs = _add_arg_from_config(_kwargs, args)
