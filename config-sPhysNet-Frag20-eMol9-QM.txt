@@ -35,6 +35,7 @@
 --edge_version=cutoff
 --cutoff=10.0
 --boundary_factor=100.
+--remove_atom_ids=-1
 --folder_prefix=exp184
 --comment=original PhysNet, coulomb correction
 --coulomb_charge_correct=True
