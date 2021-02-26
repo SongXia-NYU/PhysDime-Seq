@@ -12,6 +12,7 @@ from datetime import datetime
 import torch
 import torch.cuda
 import torch.utils.data
+from tqdm import tqdm
 from warmup_scheduler import GradualWarmupScheduler
 
 from CombinedIMDataset import CombinedIMDataset
@@ -163,7 +164,7 @@ def val_step_new(model, _data_loader, loss_fn):
     return detail
 
 
-def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
+def train(config_args, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
     if config_args.action == "names":
         config_args.action = config_args.target_names
 
@@ -356,7 +357,10 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False):
     early_stop_count = 0
     for epoch in range(config_dict["num_epochs"]):
         train_loss = 0.
-        for batch_num, data in enumerate(train_data_loader):
+        loader = enumerate(train_data_loader)
+        if use_tqdm:
+            loader = tqdm(loader)
+        for batch_num, data in loader:
             this_size = data.E.shape[0]
 
             train_loss += train_step(net, _optimizer=optimizer, data_batch=data, loss_fn=loss_fn,
