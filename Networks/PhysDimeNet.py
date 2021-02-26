@@ -479,5 +479,7 @@ class PhysDimeNet(nn.Module):
                 error_message(torch.abs(E_pred.detach()).max(), 'Energy prediction')
         if self.action == "E":
             return E_pred, F_pred, Q_pred, D_pred, nh_loss
+        elif self.action == "3_E_1_QD":
+            pass
         else:
             return mol_pred_properties, 0., 0., 0., nh_loss

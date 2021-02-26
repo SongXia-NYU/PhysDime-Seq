@@ -359,7 +359,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
         train_loss = 0.
         loader = enumerate(train_data_loader)
         if use_tqdm:
-            loader = tqdm(loader)
+            loader = tqdm(loader, "epoch: {}".format(epoch))
         for batch_num, data in loader:
             this_size = data.E.shape[0]
 
