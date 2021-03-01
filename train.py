@@ -16,6 +16,7 @@ from tqdm import tqdm
 from warmup_scheduler import GradualWarmupScheduler
 
 from CombinedIMDataset import CombinedIMDataset
+from DummyIMDataset import DummyIMDataset
 from Frag9to20MixIMDataset import Frag9to20MixIMDataset, uniform_split, small_split, large_split
 from Frag20IMDataset import Frag20IMDataset
 from Networks.PhysDimeNet import PhysDimeNet
@@ -100,6 +101,11 @@ def data_provider_solver(name_full, _kw_args):
         _kw_args['train_index'] = torch.cat([train_index, torch.arange(len_frag20, len_e9 + len_frag20)])
         _kw_args['dataset_list'] = [frag20dataset, e_mol9_dataset]
         return CombinedIMDataset, _kw_args
+    elif name_base == "dummy":
+        # I like data-driven :)
+        assert "dataset_name", "split" in additional_kwargs
+        _kw_args.update(additional_kwargs)
+        return DummyIMDataset, _kw_args
     else:
         raise ValueError('Unrecognized dataset name: {} !'.format(name_base))
 
