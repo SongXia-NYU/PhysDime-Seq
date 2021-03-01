@@ -13,7 +13,7 @@
 --n_bi_linear=8
 --num_epochs=1000
 --warm_up_steps=0
---data_provider=frag20_eMol9_combine
+--data_provider=dummy[dataset_name=Frag20_eMol9_QM.pt,split=frag20_eMol9_split.pt]
 --test_interval=-1
 --learning_rate=0.001
 --ema_decay=0.999
