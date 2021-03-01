@@ -8,11 +8,8 @@
 #SBATCH --mem=30GB
 
 module purge
-module load gcc/6.3.0
-module load cuda/10.1.105
 
-source $(conda info --base)/etc/profile.d/conda.sh
-conda activate torch-geometric
-
-export PYTHONPATH=../dataProviders:$PYTHONPATH
-python train.py --config_name config-exp214.txt > LOG_exp214.log 2>&1
+singularity exec --nv \
+            --overlay ~/conda_envs/dnn-3.7-pytorch1.7.0-cuda11.0.ext3:ro \
+            /scratch/work/public/singularity/cuda11.0-cudnn8-devel-ubuntu18.04.sif \
+            bash -c "source /ext3/env.sh; export PYTHONPATH=../dataProviders:$PYTHONPATH; python train.py --config_name config.txt"
