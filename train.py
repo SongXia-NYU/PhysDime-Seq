@@ -171,8 +171,6 @@ def val_step_new(model, _data_loader, loss_fn):
 
 
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
-    if config_args.action == "names":
-        config_args.action = config_args.target_names
 
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
@@ -234,7 +232,8 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
         pin_memory=torch.cuda.is_available(), shuffle=True)
 
     w_e, w_f, w_q, w_p = 1., config_dict["force_weight"], config_dict["charge_weight"], config_dict["dipole_weight"]
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_dict["action"], auto_sol=config_dict["auto_sol"])
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_dict["action"], auto_sol=config_dict["auto_sol"],
+                     target_names=config_dict["target_names"])
 
     # ------------------- Setting up model and optimizer ------------------ #
     # Normalization of PhysNet atom-wise prediction
@@ -242,10 +241,10 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
         mean_atom, std_atom = atom_mean_std(getattr(data_provider.data, config_dict["action"]),
                                             data_provider.data.N, train_index)
         mean_atom = mean_atom.item()
-    elif isinstance(config_dict["action"], list):
+    elif config_dict["action"] in ["names", "names_and_QD"]:
         mean_atom = []
         std_atom = []
-        for name in config_dict["action"]:
+        for name in config_dict["target_names"]:
             this_mean, this_std = atom_mean_std(getattr(data_provider.data, name), data_provider.data.N, train_index)
             mean_atom.append(this_mean)
             std_atom.append(this_std)

@@ -7,12 +7,13 @@ from utils.utils_functions import device, mae_fn, mse_fn, kcal2ev
 
 
 class LossFn:
-    def __init__(self, w_e, w_f, w_q, w_p, action: Union[List[str], str] = "E", auto_sol=False):
+    def __init__(self, w_e, w_f, w_q, w_p, action: Union[List[str], str] = "E", auto_sol=False, target_names=None):
+        self.target_names = target_names
         self.action = deepcopy(action)
         self.w_e = w_e
         self.w_f = w_f
         self.w_q = w_q
-        self.w_p = w_p
+        self.w_d = w_p
         self.auto_sol = auto_sol
         if self.auto_sol:
             assert "gasEnergy" in self.action
@@ -22,32 +23,33 @@ class LossFn:
                 self.action.append("CalcOct")
 
     def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, requires_detail=False):
-        if isinstance(self.action, list):
-            '''
-            Solvation energy is in kcal/mol but gas/water/octanol energy is in eV
-            '''
-            # multi-task prediction
-            if self.auto_sol:
-                total_pred = [E_pred]
-                gas_id = self.action.index("gasEnergy")
-                for sol_name in ["watEnergy", "octEnergy"]:
-                    if sol_name in self.action:
-                        sol_id = self.action.index(sol_name)
-                        total_pred.append((E_pred[:, sol_id] - E_pred[:, gas_id]).view(-1, 1)/kcal2ev)
-                E_pred = torch.cat(total_pred, dim=-1)
+        if self.action in ["names", "names_and_QD"]:
+            E_tgt, E_pred = self._get_target(E_pred, data)
 
-            assert E_pred.shape[-1] == len(self.action)
-            tgt = torch.cat([getattr(data, name).view(-1, 1) for name in self.action], dim=-1)
+            mae_loss = torch.mean(torch.abs(E_pred - E_tgt), dim=0, keepdim=True)
+            rmse_loss = torch.sqrt(torch.mean((E_pred - E_tgt)**2, dim=0, keepdim=True))
 
-            mae_loss = torch.mean(torch.abs(E_pred - tgt), dim=0, keepdim=True)
-            rmse_loss = torch.sqrt(torch.mean((E_pred - tgt)**2, dim=0, keepdim=True))
+            total_loss = mae_loss.sum()
             if requires_detail:
-                detail = {"MAE_{}".format(name): mae_loss[:, i].item() for i, name in enumerate(self.action)}
-                for i, name in enumerate(self.action):
+                detail = {"MAE_{}".format(name): mae_loss[:, i].item() for i, name in enumerate(self.target_names)}
+                for i, name in enumerate(self.target_names):
                     detail["RMSE_{}".format(name)] = rmse_loss[:, i].item()
-                return mae_loss.sum(), detail
             else:
-                return mae_loss.sum()
+                detail = None
+
+            if self.action == "names_and_QD":
+                q_mae = torch.mean(torch.abs(Q_pred - data.Q))
+                d_mae = torch.mean(torch.abs(D_pred - data.D))
+                total_loss = total_loss + self.w_q * q_mae + self.w_d * d_mae
+                if requires_detail:
+                    detail["MAE_Q"] = q_mae.item()
+                    detail["MAE_D"] = d_mae.item()
+
+            if requires_detail:
+                return total_loss, detail
+            else:
+                return total_loss
+
         elif self.action == "E":
             # default PhysNet setting
             E_loss, F_loss, Q_loss, D_loss = 0, 0, 0, 0
@@ -60,7 +62,7 @@ class LossFn:
 
             Q_loss = self.w_q * torch.mean(torch.abs(Q_pred - data.Q))
 
-            D_loss = self.w_p * torch.mean(torch.abs(D_pred - data.D))
+            D_loss = self.w_d * torch.mean(torch.abs(D_pred - data.D))
 
             if requires_detail:
                 return E_loss + F_loss + Q_loss + D_loss, {"MAE_E": E_loss.item(), "MAE_F": F_loss,
@@ -69,3 +71,22 @@ class LossFn:
                 return E_loss + F_loss + Q_loss + D_loss
         else:
             raise ValueError("Invalid action: {}".format(self.action))
+
+    def _get_target(self, E_pred, data):
+        """
+        Get energy target from data
+        Solvation energy is in kcal/mol but gas/water/octanol energy is in eV
+        """
+        # multi-task prediction
+        if self.auto_sol:
+            total_pred = [E_pred]
+            gas_id = self.target_names.index("gasEnergy")
+            for sol_name in ["watEnergy", "octEnergy"]:
+                if sol_name in self.target_names:
+                    sol_id = self.target_names.index(sol_name)
+                    total_pred.append((E_pred[:, sol_id] - E_pred[:, gas_id]).view(-1, 1) / kcal2ev)
+            E_pred = torch.cat(total_pred, dim=-1)
+
+        assert E_pred.shape[-1] == len(self.target_names)
+        E_tgt = torch.cat([getattr(data, name).view(-1, 1) for name in self.target_names], dim=-1)
+        return E_tgt, E_pred

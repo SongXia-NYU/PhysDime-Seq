@@ -53,7 +53,8 @@ class PhysDimeNet(nn.Module):
                  energy_shift=None,
                  energy_scale=None,
                  debug_mode=False,
-                 action="E"):
+                 action="E",
+                 target_names=None):
         """
         
         :param n_atom_embedding: number of atoms to embed, usually set to 95
@@ -69,6 +70,7 @@ class PhysDimeNet(nn.Module):
         super().__init__()
 
         # convert input into a dictionary
+        self.target_names = target_names
         self.action = action
         self.coulomb_charge_correct = coulomb_charge_correct
         self.uncertainty_modify = uncertainty_modify
@@ -269,7 +271,7 @@ class PhysDimeNet(nn.Module):
         for i in range(len(self.modules)):
             getattr(self, 'module{}'.format(i)).freeze_prev_layers()
 
-    def forward(self, data, action="E"):
+    def forward(self, data):
         # torch.cuda.synchronize(device=device)
         # t0 = time.time()
 
@@ -463,23 +465,23 @@ class PhysDimeNet(nn.Module):
 
         # t0 = record_data('atom prop to molecule', t0)
 
-        E_pred = mol_pred_properties[:, 0]
         Q_pred = None
         D_pred = None
         F_pred = None
         if self.n_output > 1:
-            Q_pred = mol_pred_properties[:, 1]
-            Q_atom = atom_prop[:, 1]
+            # the last property is considered as atomic charge prediction
+            Q_pred = mol_pred_properties[:, -1]
+            Q_atom = atom_prop[:, -1]
             D_atom = Q_atom.view(-1, 1) * R
             D_pred = scatter(reduce='add', src=D_atom, index=atom_mol_batch, dim=0)
 
         # t0 = record_data('others', t0)
         if self.debug_mode:
-            if torch.abs(E_pred.detach()).max() > 1e4:
-                error_message(torch.abs(E_pred.detach()).max(), 'Energy prediction')
+            if torch.abs(mol_pred_properties.detach()).max() > 1e4:
+                error_message(torch.abs(mol_pred_properties.detach()).max(), 'Energy prediction')
         if self.action == "E":
-            return E_pred, F_pred, Q_pred, D_pred, nh_loss
-        elif self.action == "3_E_1_QD":
-            pass
+            return mol_pred_properties[:, 0], F_pred, Q_pred, D_pred, nh_loss
+        elif self.action == "names_and_QD":
+            return mol_pred_properties[:, :-1], F_pred, Q_pred, D_pred, nh_loss
         else:
             return mol_pred_properties, 0., 0., 0., nh_loss

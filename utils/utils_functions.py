@@ -651,7 +651,8 @@ def kwargs_solver(args):
                  'bonding_type': args.bonding_type,
                  'uncertainty_modify': args.uncertainty_modify,
                  'coulomb_charge_correct': coulomb_charge_correct,
-                 'action': args.action
+                 'action': args.action,
+                 'target_names': args.target_names
                  }
     return DNNKwargs
 

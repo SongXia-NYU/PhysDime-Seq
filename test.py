@@ -363,8 +363,10 @@ def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist
     net.load_state_dict(model_data)
     w_e, w_f, w_q, w_p = 1, args.force_weight, args.charge_weight, args.dipole_weight
 
-    action = args.target_names if args.action != "E" else "E"
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=action, auto_sol=("gasEnergy" in action))
+    # why did I do that?
+    # action = args.target_names if args.action != "E" else "E"
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=args.action, auto_sol=("gasEnergy" in args.target_names),
+                     target_names=args.target_names)
 
     mae_fn = torch.nn.L1Loss(reduction='mean')
     mse_fn = torch.nn.MSELoss(reduction='mean')
