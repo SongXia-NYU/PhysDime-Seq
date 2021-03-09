@@ -15,7 +15,7 @@
 --warm_up_steps=0
 --data_provider=qm9
 --test_interval=-1
---learning_rate=0.0033
+--learning_rate=0.001
 --ema_decay=0.999
 --l2lambda=0.0
 --nh_lambda=0.01
@@ -35,9 +35,9 @@
 --edge_version=cutoff
 --cutoff=10.0
 --boundary_factor=100.
---folder_prefix=exp245
---comment=PhysNet for all properties prediction, MMFF
+--folder_prefix=exp253
+--comment=QD lead energy prediction
 --n_output=2
---action=names_and_QD
+--action=E
 --target_names=E
 --remove_atom_ids=-1

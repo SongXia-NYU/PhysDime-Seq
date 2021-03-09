@@ -229,7 +229,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
 
     val_data_loader = torch.utils.data.DataLoader(
         data_provider[torch.as_tensor(val_index)], batch_size=config_dict["valid_batch_size"], collate_fn=collate_fn,
-        pin_memory=torch.cuda.is_available(), shuffle=True)
+        pin_memory=torch.cuda.is_available(), shuffle=False)
 
     w_e, w_f, w_q, w_p = 1., config_dict["force_weight"], config_dict["charge_weight"], config_dict["dipole_weight"]
     loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=config_dict["action"], auto_sol=config_dict["auto_sol"],
