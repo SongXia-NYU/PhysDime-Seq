@@ -248,6 +248,10 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
             this_mean, this_std = atom_mean_std(getattr(data_provider.data, name), data_provider.data.N, train_index)
             mean_atom.append(this_mean)
             std_atom.append(this_std)
+        if config_dict["action"] == "names_and_QD":
+            # the last dimension is for predicting atomic charge
+            mean_atom.append(0.)
+            std_atom.append(1.)
         mean_atom = torch.as_tensor(mean_atom)
         std_atom = torch.as_tensor(std_atom)
     elif config_dict["action"] == "solubility":
