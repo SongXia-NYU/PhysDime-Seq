@@ -18,9 +18,9 @@ class LossFn:
         if self.auto_sol:
             assert "gasEnergy" in self.target_names
             if "watEnergy" in self.target_names:
-                self.action.append("CalcSol")
+                self.target_names.append("CalcSol")
             if "octEnergy" in self.target_names:
-                self.action.append("CalcOct")
+                self.target_names.append("CalcOct")
 
     def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, requires_detail=False):
         if self.action in ["names", "names_and_QD"]:
