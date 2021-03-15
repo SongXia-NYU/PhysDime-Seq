@@ -214,6 +214,7 @@ def cal_coulomb_E(qi: torch.Tensor, edge_dist, edge_index, cutoff, q_ref, N, ato
     # debug: cal passed time to improve code
     # print('T--------split: ', time.time() - t0)
 
+    # Probably I should do qi = qi.clone() to avoid inplace calculation
     q_first = qi.take(edge_index[0, :]).view(-1, 1)
     q_second = qi.take(edge_index[1, :]).view(-1, 1)
     revised_dist = _chi_ij(edge_dist, cutoff=cutoff)

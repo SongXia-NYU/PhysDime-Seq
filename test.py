@@ -484,7 +484,8 @@ def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist
                                              run_dir=test_dir, n_forward=n_forward)
         E_pred = test_info['E_pred']
         test_info_analyze(23.061 * E_pred, 23.061 * _data.data.E[test_index], test_dir, logger)
-    elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20', "frag20"]:
+    elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20', "frag20",
+                                                      "dummy"]:
         data_provider = get_test_set(test_dataset, args)
         if isinstance(data_provider, tuple):
             data_provider_test = data_provider[1]
@@ -509,13 +510,13 @@ def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist
                 pin_memory=torch.cuda.is_available(), shuffle=False)
             test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
                       dataset_name='{}_valid'.format(test_dataset), run_dir=test_dir, n_forward=n_forward,
-                      action=action)
+                      action=args.action)
         test_data_loader = torch.utils.data.DataLoader(
             data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available(), shuffle=False)
         test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                              mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_dir, n_forward=n_forward, action=action)
+                                             run_dir=test_dir, n_forward=n_forward, action=args.action)
         # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
         #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
         #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)

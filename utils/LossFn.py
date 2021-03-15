@@ -16,10 +16,10 @@ class LossFn:
         self.w_d = w_p
         self.auto_sol = auto_sol
         if self.auto_sol:
-            assert "gasEnergy" in self.action
-            if "watEnergy" in self.action:
+            assert "gasEnergy" in self.target_names
+            if "watEnergy" in self.target_names:
                 self.action.append("CalcSol")
-            if "octEnergy" in self.action:
+            if "octEnergy" in self.target_names:
                 self.action.append("CalcOct")
 
     def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, requires_detail=False):
