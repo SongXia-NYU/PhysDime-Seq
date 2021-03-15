@@ -555,7 +555,10 @@ def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist
                             osp.join(test_dir, '{}_{}.pt'.format(name, explicit_test)))
         shutil.copy(osp.join(test_dir, 'test.log'), osp.join(test_dir, 'test_{}.log'.format(explicit_test)))
 
+    # remove global variables
     remove_handler(logger)
+    del parser
+    del args
 
 
 def cal_loss(pred, e_target, d_target, q_target, mae_fn, mse_fn):
@@ -572,8 +575,8 @@ def cal_loss(pred, e_target, d_target, q_target, mae_fn, mse_fn):
 
 
 def test_all():
-    parser = argparse.ArgumentParser(fromfile_prefix_chars='@')
-    parser = add_parser_arguments(parser)
+    parser = argparse.ArgumentParser()
+    # parser = add_parser_arguments(parser)
     parser.add_argument('--folder_names', default='../PhysDimeTestTmp/exp*_run_*', type=str)
     parser.add_argument('--x_forward', default=1, type=int)
     parser.add_argument('--explicit_test', default=None, type=str)
