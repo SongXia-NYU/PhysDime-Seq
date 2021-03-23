@@ -208,20 +208,28 @@ def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active
         val_data_loader = torch.utils.data.DataLoader(
             data_provider[torch.as_tensor(val_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
             pin_memory=torch.cuda.is_available(), shuffle=False)
-        test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                  dataset_name='{}_valid'.format(args.data_provider), run_dir=test_dir, n_forward=n_forward,
-                  action=args.action)
+        valid_info, valid_std = test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn,
+                                          mse_fn=mse_fn,  dataset_name='{}_valid'.format(args.data_provider),
+                                          run_dir=test_dir, n_forward=n_forward, action=args.action)
+        logger.info("-------------- VALID ---------------")
+        for key in valid_info:
+            logger.info("{}: {}".format(key, valid_info[key]))
     test_data_loader = torch.utils.data.DataLoader(
         data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
         pin_memory=torch.cuda.is_available(), shuffle=False)
     test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
                                          mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(args.data_provider)
                                          , run_dir=test_dir, n_forward=n_forward, action=args.action)
+    logger.info("-------------- TEST ---------------")
+    for key in test_info:
+        logger.info("{}: {}".format(key, test_info[key]))
+
     # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
     #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
     #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
     #     torch.save(loss, os.path.join(test_directory, 'loss.pt'))
     if "E_pred" in test_info:
+        # TODO Deprecated
         E_pred = test_info['E_pred']
         if test_info_std is not None:
             E_pred_std = test_info_std['E_pred']

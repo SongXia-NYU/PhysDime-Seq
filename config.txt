@@ -29,7 +29,7 @@
 --force_weight=0
 --charge_weight=1
 --dipole_weight=1
---use_trained_model=../PhysDimeTestTmp/exp261_run_2021-03-13_115914
+--use_trained_model=../PhysDimeTestTmp/exp266_run_2021-03-22_163613
 --max_norm=1000.0
 --log_file_name=training.log
 --normalize=True
@@ -41,4 +41,4 @@
 --n_output=1
 --reset_output_layers=True
 --boundary_factor=100.
---folder_prefix=exp261-ft-freeSol
+--folder_prefix=exp266-ft-freeSol
