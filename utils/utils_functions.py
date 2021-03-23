@@ -434,6 +434,9 @@ def collate_fn(data_list, clone=False, n_extra_node=0):
     if "InChI" in keys:
         keys.remove("InChI")
 
+    if "group" in keys:
+        keys.remove("group")
+
     if n_extra_node > 0:
         pass
 
@@ -708,13 +711,14 @@ def add_parser_arguments(parser):
     parser.add_argument('--warm_up_steps', type=int, help="Steps to warm up")
     parser.add_argument('--data_provider', type=str, help="Data provider arguments:"
                                                           " qm9 | frag9to20_jianing | frag9to20_all")
+    parser.add_argument('--data_root', type=str, default="../dataProviders/data")
     parser.add_argument('--uncertainty_modify', type=str, default='none',
                         help="none | concreteDropoutModule | concreteDropoutOutput | swag_${start}_${freq}")
     parser.add_argument('--early_stop', type=int, default=-1, help="early stopping, set to -1 to disable")
     parser.add_argument('--optimizer', type=str, default='emaAms_0.999', help="emaAms_${ema} | sgd")
     parser.add_argument('--freeze_option', type=str, default='none', help='none | prev | prev_extra')
     parser.add_argument('--comment', type=str, help='just comment')
-    parser.add_argument('--remove_atom_ids', type=int, default=5, help='remove atoms from dataset')
+    parser.add_argument('--remove_atom_ids', type=int, default=-1, help='remove atoms from dataset')
     parser.add_argument('--coulomb_charge_correct', type=str, default="False",
                         help='calculate charge correction when calculation Coulomb interaction')
     parser.add_argument('--reset_optimizer', type=str, default="True",
@@ -730,6 +734,7 @@ def add_parser_arguments(parser):
     parser.add_argument("--target_nodes", type=str, default="False",
                         help="Add extra nodes (fake atoms) for each target, the result of each target will be the "
                              "aggregated repr of each node.")
+    parser.add_argument("--reset_output_layers", type=str, default="False")
     return parser
 
 

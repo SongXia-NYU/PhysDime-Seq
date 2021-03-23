@@ -19,35 +19,250 @@ from Networks.UncertaintyLayers.swag import SWAG
 from PhysDimeIMDataset import PhysDimeIMDataset
 from PlatinumTestIMDataSet import PlatinumTestIMDataSet
 from qm9InMemoryDataset import Qm9InMemoryDataset
-from train import data_provider_solver, val_step_new, default_kwargs, _add_arg_from_config
+from train import data_provider_solver, val_step_new, _add_arg_from_config
 from deprecated_code.junk_code import val_step
 from utils.LossFn import LossFn
 from utils.utils_functions import add_parser_arguments, kwargs_solver, device, floating_type, \
     collate_fn, remove_handler
 from torch_scatter import scatter
 
-# record last data provider to avoid loading the same one over and over again
-last_data_provider = None
+
+def test_info_analyze(pred, target, test_dir, logger=None, name='Energy', threshold_base=1.0, unit='kcal/mol',
+                      pred_std=None,
+                      x_forward=0):
+    diff = pred - target
+    rank = torch.argsort(diff.abs())
+    diff_ranked = diff[rank]
+    if logger is None:
+        logging.basicConfig(filename=os.path.join(test_dir, 'test.log'),
+                            format='%(asctime)s %(message)s',
+                            filemode='w')
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        remove_logger = True
+    else:
+        remove_logger = False
+    logger.info('Top 10 {} error: {}'.format(name, diff_ranked[-10:]))
+    logger.info('Top 10 {} error id: {}'.format(name, rank[-10:]))
+    e_mae = diff.abs().mean()
+    logger.info('{} MAE: {}'.format(name, e_mae))
+    thresholds = torch.logspace(-2, 2, 50) * threshold_base
+    thresholds = thresholds.tolist()
+    thresholds.extend([1.0, 10.])
+    for threshold in thresholds:
+        mask = (diff.abs() < threshold)
+        logger.info('Percent of {} error < {:.4f} {}: {} out of {}, {:.2f}%'.format(
+            name, threshold, unit, len(diff[mask]), len(diff), 100 * float(len(diff[mask])) / len(diff)))
+    torch.save(diff, os.path.join(test_dir, 'diff.pt'))
+
+    # concrete dropout
+    if x_forward and (pred_std is not None):
+        # print_scatter(pred_std, diff, name, unit, test_dir)
+        print_uncetainty_figs(pred_std, diff, name, unit, test_dir)
+    if x_forward:
+        print_training_curve(test_dir)
+
+    if remove_logger:
+        remove_handler(logger)
+    return
 
 
-# def print_scatter(pred_std, diff, name, unit, run_dir):
-#     """
-#
-#     :param pred_std: standard deviation of N predictions
-#     :param diff: absolute error == (|avg_pred - target|)
-#     :param name:
-#     :param unit:
-#     :param run_dir:
-#     :return:
-#     """
-#     plt.figure(figsize=(15, 10))
-#     diff_abs = diff.abs()
-#     plt.scatter(pred_std, diff_abs, alpha=0.1)
-#     plt.xlabel('Uncertainty of {}, {}'.format(name, unit))
-#     plt.ylabel('Error of {}, {}'.format(name, unit))
-#     plt.title('Uncertainty vs. prediction error')
-#     plt.savefig(os.path.join(run_dir, 'uncertainty'))
-#     return
+def get_test_set(dataset_name, args):
+    default_kwargs = {'root': args.data_root, 'pre_transform': my_pre_transform, 'record_long_range': True,
+                      'type_3_body': 'B', 'cal_3body_term': True}
+    dataset_cls, _kwargs = data_provider_solver(dataset_name, default_kwargs)
+    _kwargs = _add_arg_from_config(_kwargs, args)
+    dataset = dataset_cls(**_kwargs)
+    print("used dataset: {}".format(dataset.processed_file_names))
+    return dataset
+
+
+def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Loss(reduction='mean'),
+              mse_fn=torch.nn.MSELoss(reduction='mean'), dataset_name='data', run_dir=None,
+              n_forward=50, **kwargs):
+    if args.uncertainty_modify == 'none':
+        result = val_step_new(net, data_loader, loss_fn, is_testing=True)
+        torch.save(result, os.path.join(run_dir, 'loss_{}.pt'.format(dataset_name)))
+        return result, None
+    elif args.uncertainty_modify.split('_')[0].split('[')[0] in ['concreteDropoutModule', 'concreteDropoutOutput',
+                                                                 'swag']:
+        print("You need to update the code of val_step_new")
+        if os.path.exists(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward))):
+            print('loading exist files!')
+            avg_result = torch.load(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
+            std_result = torch.load(os.path.join(run_dir, dataset_name + '-std{}.pt'.format(n_forward)))
+        else:
+            avg_result = {}
+            std_result = {}
+            cum_result = {'E_pred': [], 'D_pred': [], 'Q_pred': []}
+            for i in range(n_forward):
+                if args.uncertainty_modify.split('_')[0] == 'swag':
+                    net.sample(scale=1.0, cov=True)
+                result_i = val_step(net, data_loader, total_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
+                                    dataset_name=dataset_name, print_to_log=False, detailed_info=True, **kwargs)
+
+                for key in cum_result.keys():
+                    cum_result[key].append(result_i[key])
+            # list -> tensor
+            for key in cum_result.keys():
+                cum_result[key] = torch.stack(cum_result[key])
+                avg_result[key] = cum_result[key].mean(dim=0)
+                std_result[key] = cum_result[key].std(dim=0)
+            torch.save(avg_result, os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
+            torch.save(std_result, os.path.join(run_dir, dataset_name + '-std{}.pt'.format(n_forward)))
+        return avg_result, std_result
+    else:
+        raise ValueError('unrecognized uncertainty_modify: {}'.format(args.uncertainty_modify))
+
+
+def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active=False):
+
+    # --------------- Dealing with active learning and uncertainty models -------------------- #
+    if folder_name.find('active') >= 0 and check_active:
+        cycle_folders = glob.glob(osp.join(folder_name, 'cycle*_run_*'))
+        for ele in cycle_folders:
+            # removing new molecules training folder
+            if ele.find('_new_mol_') > 0:
+                cycle_folders.remove(ele)
+        cycle_folders.sort(key=lambda s: int(s.split('_')[0][5:]))
+        folder_name = cycle_folders[-1]
+        print('testing active learning folder: {}'.format(folder_name))
+    # parse config file
+    if osp.exists(osp.join(folder_name, "config-test.txt")):
+        config_name = osp.join(folder_name, "config-test.txt")
+    else:
+        config_name = glob.glob(osp.join(folder_name, 'config-exp*.txt'))[0]
+    parser = argparse.ArgumentParser(fromfile_prefix_chars='@')
+    parser = add_parser_arguments(parser)
+    args, unknown = parser.parse_known_args(["@" + config_name])
+    inferred_prefix = folder_name.split('_run_')[0]
+    if args.folder_prefix != inferred_prefix:
+        print('overwriting folder {} ----> {}'.format(args.folder_prefix, inferred_prefix))
+        args.folder_prefix = inferred_prefix
+    use_swag = (args.uncertainty_modify.split('_')[0] == 'swag')
+
+    net_kwargs = kwargs_solver(args)
+    net = PhysDimeNet(**net_kwargs)
+    net = net.to(device)
+    net = net.type(floating_type)
+
+    if use_swag:
+        net = SWAG(net, no_cov_mat=False, max_num_models=20)
+        model_data = torch.load(os.path.join(folder_name, 'swag_model.pt'), map_location=device)
+    else:
+        model_data = torch.load(os.path.join(folder_name, 'best_model.pt'), map_location=device)
+
+    net.load_state_dict(model_data)
+    w_e, w_f, w_q, w_p = 1, args.force_weight, args.charge_weight, args.dipole_weight
+
+    # why did I do that?
+    # action = args.target_names if args.action != "E" else "E"
+    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=args.action, auto_sol=("gasEnergy" in args.target_names),
+                     target_names=args.target_names)
+
+    mae_fn = torch.nn.L1Loss(reduction='mean')
+    mse_fn = torch.nn.MSELoss(reduction='mean')
+
+    test_prefix = args.folder_prefix + '_test_'
+
+    if use_exist:
+        test_dir = glob.glob('{}*'.format(test_prefix))[0]
+    else:
+        current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+        folder_dir = osp.dirname(folder_name)
+        test_dir = test_prefix + current_time
+        test_dir = osp.join(folder_dir, test_dir)
+        os.mkdir(test_dir)
+
+    shutil.copyfile(os.path.join(folder_name, 'loss_data.pt'), os.path.join(test_dir, 'loss_data.pt'))
+    shutil.copy(config_name, test_dir)
+
+    logging.basicConfig(filename=os.path.join(test_dir, "test.log"),
+                        format='%(asctime)s %(message)s',
+                        filemode='w')
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    logger.info("dataset in args: {}".format(args.data_provider))
+
+    # ---------------------------------- Testing -------------------------------- #
+    data_provider = get_test_set(args.data_provider, args)
+    if isinstance(data_provider, tuple):
+        data_provider_test = data_provider[1]
+        data_provider = data_provider[0]
+    else:
+        data_provider_test = data_provider
+    val_index = data_provider.val_index
+    test_index = data_provider_test.test_index
+    logger.info("dataset: {}".format(data_provider.processed_file_names))
+    logger.info("valid size: {}".format(len(val_index)))
+    logger.info("test size: {}".format(len(test_index)))
+    if args.remove_atom_ids > 0:
+        _, val_index, _ = remove_atom_from_dataset(args.remove_atom_ids, data_provider, ("valid",),
+                                                   (None, val_index, None))
+        logger.info('removing B from test dataset...')
+        _, _, test_index = remove_atom_from_dataset(args.remove_atom_ids, data_provider_test, ('test',),
+                                                    (None, None, test_index))
+
+    if val_index is not None:
+        val_data_loader = torch.utils.data.DataLoader(
+            data_provider[torch.as_tensor(val_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
+            pin_memory=torch.cuda.is_available(), shuffle=False)
+        test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
+                  dataset_name='{}_valid'.format(args.data_provider), run_dir=test_dir, n_forward=n_forward,
+                  action=args.action)
+    test_data_loader = torch.utils.data.DataLoader(
+        data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
+        pin_memory=torch.cuda.is_available(), shuffle=False)
+    test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
+                                         mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(args.data_provider)
+                                         , run_dir=test_dir, n_forward=n_forward, action=args.action)
+    # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
+    #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
+    #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
+    #     torch.save(loss, os.path.join(test_directory, 'loss.pt'))
+    if "E_pred" in test_info:
+        E_pred = test_info['E_pred']
+        if test_info_std is not None:
+            E_pred_std = test_info_std['E_pred']
+        else:
+            E_pred_std = None
+        test_info_analyze(23.061 * E_pred, 23.061 * data_provider_test.data.E[test_index],
+                          test_dir, logger, pred_std=E_pred_std, x_forward=x_forward)
+
+    # remove global variables
+    remove_handler(logger)
+    del parser
+    del args
+
+
+def cal_loss(pred, e_target, d_target, q_target, mae_fn, mse_fn):
+    result = {
+        'loss': None,
+        'emae': mae_fn(pred['E_pred'], e_target),
+        'ermse': torch.sqrt(mse_fn(pred['E_pred'], e_target)),
+        'pmae': mae_fn(pred['D_pred'], d_target),
+        'prmse': torch.sqrt(mse_fn(pred['D_pred'], d_target)),
+        'qmae': mae_fn(pred['Q_pred'], q_target),
+        'qrmse': torch.sqrt(mse_fn(pred['Q_pred'], q_target)),
+    }
+    return result
+
+
+def test_all():
+    parser = argparse.ArgumentParser()
+    # parser = add_parser_arguments(parser)
+    parser.add_argument('--folder_names', default='../PhysDimeTestTmp/exp*_run_*', type=str)
+    parser.add_argument('--x_forward', default=1, type=int)
+    parser.add_argument('--n_forward', default=25, type=int)
+    parser.add_argument('--use_exist', action="store_true")
+    _args = parser.parse_args()
+
+    run_dirs = glob.glob(_args.folder_names)
+
+    for name in run_dirs:
+        print('testing folder: {}'.format(name))
+        test_folder(name, _args.n_forward, _args.x_forward, _args.use_exist)
 
 
 def print_training_curve(test_dir):
@@ -184,419 +399,6 @@ def print_uncetainty_figs(pred_std, diff, name, unit, test_dir, n_bins=10):
     plt.title('error percent')
     plt.savefig(os.path.join(test_dir, 'error_percent'))
     return
-
-
-def test_info_analyze(pred, target, test_dir, logger=None, name='Energy', threshold_base=1.0, unit='kcal/mol',
-                      pred_std=None,
-                      x_forward=0):
-    diff = pred - target
-    rank = torch.argsort(diff.abs())
-    diff_ranked = diff[rank]
-    if logger is None:
-        logging.basicConfig(filename=os.path.join(test_dir, 'test.log'),
-                            format='%(asctime)s %(message)s',
-                            filemode='w')
-        logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)
-        remove_logger = True
-    else:
-        remove_logger = False
-    logger.info('Top 10 {} error: {}'.format(name, diff_ranked[-10:]))
-    logger.info('Top 10 {} error id: {}'.format(name, rank[-10:]))
-    e_mae = diff.abs().mean()
-    logger.info('{} MAE: {}'.format(name, e_mae))
-    thresholds = torch.logspace(-2, 2, 50) * threshold_base
-    thresholds = thresholds.tolist()
-    thresholds.extend([1.0, 10.])
-    for threshold in thresholds:
-        mask = (diff.abs() < threshold)
-        logger.info('Percent of {} error < {:.4f} {}: {} out of {}, {:.2f}%'.format(
-            name, threshold, unit, len(diff[mask]), len(diff), 100 * float(len(diff[mask])) / len(diff)))
-    torch.save(diff, os.path.join(test_dir, 'diff.pt'))
-
-    # concrete dropout
-    if x_forward and (pred_std is not None):
-        # print_scatter(pred_std, diff, name, unit, test_dir)
-        print_uncetainty_figs(pred_std, diff, name, unit, test_dir)
-    if x_forward:
-        print_training_curve(test_dir)
-
-    if remove_logger:
-        remove_handler(logger)
-    return
-
-
-def get_test_set(dataset_name, args):
-    _, arg_in_name = data_provider_solver(dataset_name, {})
-    if dataset_name == 'conf20':
-        dataset = PhysDimeIMDataset(processed_prefix='conf20', root='../dataProviders/data',
-                                    pre_transform=my_pre_transform,
-                                    infile_dic={'PhysNet': 'conf20_QM_PhysNet.npz', 'SDF': 'conf20_QM.pt'})
-    elif dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E" and (not arg_in_name["add_sol"]):
-        # convert all to jianing split for consistent split
-        dataset_name = dataset_name.replace('all', 'jianing', 1)
-        dataset_cls, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
-                                                                  'pre_transform': my_pre_transform,
-                                                                  'record_long_range': True,
-                                                                  'type_3_body': 'B',
-                                                                  'cal_3body_term': True})
-        dataset_train = dataset_cls(**kw_arg)
-        kw_arg['training_option'] = 'test'
-        return dataset_train, dataset_cls(**kw_arg)
-    else:
-        dataset_cls, _kwargs = data_provider_solver(dataset_name, default_kwargs)
-        _kwargs = _add_arg_from_config(_kwargs, args)
-        dataset = dataset_cls(**_kwargs)
-    print("used dataset: {}".format(dataset.processed_file_names))
-    return dataset
-    # redirect to train.py dataset getter. It is needed because different dataset share the same test set
-    # if dataset_name.split('_')[0].split('[')[0] == 'qm9':
-    #     dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
-    #                                                           'pre_transform': my_pre_transform,
-    #                                                           'record_long_range': True,
-    #                                                           'type_3_body': 'B',
-    #                                                           'cal_3body_term': True})
-    #     dataset_ = dataset(**kw_arg)
-    #     return dataset_
-    # elif dataset_name == 'qm9+extBond':
-    #     print("please use qm9[extBond=True]")
-    #     return Qm9InMemoryDataset(root='../dataProviders/data', pre_transform=my_pre_transform,
-    #                               record_long_range=True, cal_3body_term=True, extended_bond=True,
-    #                               edge_version=args.edge_version, cutoff=args.cutoff,
-    #                               boundary_factor=args.boundary_factor)
-    # elif dataset_name == 'frag9':
-    #     raise NotImplemented('not implemented')
-    # elif dataset_name.split('_')[0] == 'frag9to20':
-    #     # convert all to jianing split for consistent split
-    #     if dataset_name.split('[')[0] == 'frag9to20_all' and args.action == "E":
-    #         dataset_name = dataset_name.replace('all', 'jianing', 1)
-    #     dataset, kw_arg = data_provider_solver(dataset_name, {'root': '../dataProviders/data',
-    #                                                           'pre_transform': my_pre_transform,
-    #                                                           'record_long_range': True,
-    #                                                           'type_3_body': 'B',
-    #                                                           'cal_3body_term': True})
-    #     dataset_train = dataset(**kw_arg)
-    #     if args.action != "E":
-    #         return dataset_train
-    #     kw_arg['training_option'] = 'test'
-    #     return dataset_train, dataset(**kw_arg)
-    # elif dataset_name in ['frag20_eMol9_combine', 'frag20_eMol9_combine_MMFF']:
-    #     _name = "frag9to20_all" if dataset_name == 'frag20_eMol9_combine' else "frag9to20_all[geometry=MMFF]"
-    #     return get_test_set(_name, args)
-    # else:
-    #     raise ValueError('Unrecognized dataset: {}'.format(dataset_name))
-
-
-def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Loss(reduction='mean'),
-              mse_fn=torch.nn.MSELoss(reduction='mean'), dataset_name='data', run_dir=None,
-              n_forward=50, **kwargs):
-    if args.uncertainty_modify == 'none':
-        result = val_step_new(net, data_loader, loss_fn)
-        torch.save(result, os.path.join(run_dir, 'loss_{}.pt'.format(dataset_name)))
-        return result, None
-    elif args.uncertainty_modify.split('_')[0].split('[')[0] in ['concreteDropoutModule', 'concreteDropoutOutput',
-                                                                 'swag']:
-        print("You need to update the code of val_step_new")
-        if os.path.exists(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward))):
-            print('loading exist files!')
-            avg_result = torch.load(os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
-            std_result = torch.load(os.path.join(run_dir, dataset_name + '-std{}.pt'.format(n_forward)))
-        else:
-            avg_result = {}
-            std_result = {}
-            cum_result = {'E_pred': [], 'D_pred': [], 'Q_pred': []}
-            for i in range(n_forward):
-                if args.uncertainty_modify.split('_')[0] == 'swag':
-                    net.sample(scale=1.0, cov=True)
-                result_i = val_step(net, data_loader, total_size, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                                    dataset_name=dataset_name, print_to_log=False, detailed_info=True, **kwargs)
-
-                for key in cum_result.keys():
-                    cum_result[key].append(result_i[key])
-            # list -> tensor
-            for key in cum_result.keys():
-                cum_result[key] = torch.stack(cum_result[key])
-                avg_result[key] = cum_result[key].mean(dim=0)
-                std_result[key] = cum_result[key].std(dim=0)
-            torch.save(avg_result, os.path.join(run_dir, dataset_name + '-avg{}.pt'.format(n_forward)))
-            torch.save(std_result, os.path.join(run_dir, dataset_name + '-std{}.pt'.format(n_forward)))
-        return avg_result, std_result
-    else:
-        raise ValueError('unrecognized uncertainty_modify: {}'.format(args.uncertainty_modify))
-
-
-def test_folder(folder_name, n_forward, x_forward, explicit_test=None, use_exist=False, check_active=False):
-    if folder_name.find('active') >= 0 and check_active:
-        cycle_folders = glob.glob(osp.join(folder_name, 'cycle*_run_*'))
-        for ele in cycle_folders:
-            # removing new molecules training folder
-            if ele.find('_new_mol_') > 0:
-                cycle_folders.remove(ele)
-        cycle_folders.sort(key=lambda s: int(s.split('_')[0][5:]))
-        folder_name = cycle_folders[-1]
-        print('testing active learning folder: {}'.format(folder_name))
-    # parse config file
-    if explicit_test is not None:
-        print('WARNING!!!!! Using explicit test set: {}'.format(explicit_test))
-    config_name = os.path.join(folder_name, 'config*.txt')
-    config_name = glob.glob(config_name)[0]
-    parser = argparse.ArgumentParser(fromfile_prefix_chars='@')
-    parser = add_parser_arguments(parser)
-    args, unknown = parser.parse_known_args(["@" + config_name])
-    inferred_prefix = folder_name.split('_run_')[0]
-    if args.folder_prefix != inferred_prefix:
-        print('overwriting folder {} ----> {}'.format(args.folder_prefix, inferred_prefix))
-        args.folder_prefix = inferred_prefix
-    use_swag = (args.uncertainty_modify.split('_')[0] == 'swag')
-
-    net_kwargs = kwargs_solver(args)
-    net = PhysDimeNet(**net_kwargs)
-    net = net.to(device)
-    net = net.type(floating_type)
-
-    if use_swag:
-        net = SWAG(net, no_cov_mat=False, max_num_models=20)
-        model_data = torch.load(os.path.join(folder_name, 'swag_model.pt'), map_location=device)
-    else:
-        model_data = torch.load(os.path.join(folder_name, 'best_model.pt'), map_location=device)
-
-    net.load_state_dict(model_data)
-    w_e, w_f, w_q, w_p = 1, args.force_weight, args.charge_weight, args.dipole_weight
-
-    # why did I do that?
-    # action = args.target_names if args.action != "E" else "E"
-    loss_fn = LossFn(w_e=w_e, w_f=w_f, w_q=w_q, w_p=w_p, action=args.action, auto_sol=("gasEnergy" in args.target_names),
-                     target_names=args.target_names)
-
-    mae_fn = torch.nn.L1Loss(reduction='mean')
-    mse_fn = torch.nn.MSELoss(reduction='mean')
-
-    if explicit_test is not None:
-        test_prefix = args.folder_prefix + '_test_{}_'.format(explicit_test)
-    else:
-        test_prefix = args.folder_prefix + '_test_'
-
-    if use_exist:
-        test_dir = glob.glob('{}*'.format(test_prefix))[0]
-    else:
-        current_time = datetime.now().strftime('%Y-%m-%d_%H%M%S')
-        folder_dir = osp.dirname(folder_name)
-        test_dir = test_prefix + current_time
-        test_dir = osp.join(folder_dir, test_dir)
-        os.mkdir(test_dir)
-
-    shutil.copyfile(os.path.join(folder_name, 'loss_data.pt'), os.path.join(test_dir, 'loss_data.pt'))
-    shutil.copy(config_name, test_dir)
-
-    logging.basicConfig(filename=os.path.join(test_dir, "test.log"),
-                        format='%(asctime)s %(message)s',
-                        filemode='w')
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-
-    if explicit_test is not None:
-        test_dataset = explicit_test
-    else:
-        test_dataset = args.data_provider
-
-    logger.info("dataset in args: {}".format(test_dataset))
-
-    if test_dataset == 'platinum':
-        sep_heavy_atom = False
-        if sep_heavy_atom:
-            for i in range(10, 21):
-                data_provider = PlatinumTestIMDataSet('../dataProviders/data', pre_transform=my_pre_transform,
-                                                      sep_heavy_atom=True, num_heavy_atom=i,
-                                                      cal_3body_term=True, bond_atom_sep=True, record_long_range=True)
-
-                test_index = torch.arange(len(data_provider))
-                test_data_loader = torch.utils.data.DataLoader(
-                    data_provider[torch.as_tensor(test_index)], batch_size=32, collate_fn=collate_fn,
-                    pin_memory=torch.cuda.is_available(), shuffle=False)
-
-                test_step(args, net, test_data_loader, len(data_provider), loss_fn=loss_fn, mae_fn=mae_fn,
-                          mse_fn=mse_fn,
-                          dataset_name='platinum_{}'.format(i), run_dir=test_dir, n_forward=n_forward)
-        else:
-            test_data = PlatinumTestIMDataSet('../dataProviders/data', pre_transform=my_pre_transform,
-                                              sep_heavy_atom=False,
-                                              num_heavy_atom=None, cal_3body_term=False, bond_atom_sep=False,
-                                              record_long_range=True, qm=False)
-
-            test_index = test_data.test_index
-            test_data_loader = torch.utils.data.DataLoader(test_data[torch.as_tensor(test_index)], batch_size=32,
-                                                           collate_fn=collate_fn, pin_memory=torch.cuda.is_available(),
-                                                           shuffle=False)
-            # ------------------------- Absolute Error -------------------------- #
-            test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
-                                                 mae_fn=mae_fn, mse_fn=mse_fn,
-                                                 dataset_name='platinum', run_dir=test_dir, n_forward=n_forward)
-            E_pred = test_info['E_pred']
-            test_info_analyze(23.061 * E_pred, 23.061 * test_data.data.E[test_index], test_dir, logger)
-            csv1 = pd.read_csv("../dataProviders/data/raw/Plati20_index_10_13.csv")
-            csv2 = pd.read_csv("../dataProviders/data/raw/Plati20_index_14_20.csv")
-            mol_batch = torch.cat([torch.as_tensor(csv1["molecule_id"].values).view(-1),
-                                   torch.as_tensor(csv2["molecule_id"].values).view(-1)])
-
-            conf_id = torch.cat([torch.as_tensor(csv1["index"].values).view(-1),
-                                 torch.as_tensor(csv2["index"].values).view(-1)])
-
-            overlap_mask = torch.zeros_like(mol_batch).bool().fill_(True)
-            overlap1 = pd.read_csv("../dataProviders/data/raw/overlap_molecules_10_13.csv", header=None).values
-            overlap_mask[overlap1] = False
-            overlap2 = pd.read_csv("../dataProviders/data/raw/overlap_molecules_14_20.csv", header=None).values
-            overlap_mask[overlap2 + len(csv1["molecule_id"].values)] = False
-
-            # -------------------------- Relative Error ------------------------- #
-            mol_batch = mol_batch[overlap_mask]
-            conf_id = conf_id[overlap_mask]
-            E_pred = torch.load(osp.join(test_dir, "loss.pt"))['E_pred'].view(-1)[overlap_mask]
-            E_tgt = test_data.data.E.view(-1)[overlap_mask]
-            n_mol = mol_batch[-1].item()
-            lowest_e_tgt = torch.zeros_like(mol_batch).double()
-            lowest_e_pred = torch.zeros_like(mol_batch).double()
-            lowest_e_id_tgt = torch.zeros(n_mol).long().view(-1)
-            lowest_e_id_pred = torch.zeros(n_mol).long().view(-1)
-            for i in range(0, n_mol):
-                mask = (mol_batch == i + 1)
-                if mask.sum() == 0:
-                    continue
-                lowest_e_pred[mask] = E_pred[mask].min()
-                lowest_e_tgt[mask] = E_tgt[mask].min()
-                lowest_e_id_tgt[i] = conf_id[mask][E_tgt[mask].argmin()]
-                lowest_e_id_pred[i] = conf_id[mask][E_pred[mask].argmin()]
-            r_e_tgt = E_tgt - lowest_e_tgt
-            r_e_pred = E_pred - lowest_e_pred
-            mol_mae = scatter(reduce="mean", src=(r_e_tgt - r_e_pred).abs(), index=mol_batch - 1, dim=0)
-            mol_rmse = torch.sqrt(scatter(reduce="mean", src=(r_e_tgt - r_e_pred) ** 2, index=mol_batch - 1, dim=0))
-            logger.info("Relative EMAE: {}, ERMSE: {}, sucess rate: {}%".format(
-                mol_mae.mean(), mol_rmse.mean(), (lowest_e_id_pred == lowest_e_id_tgt).sum() * 100. / n_mol))
-    elif test_dataset in ['csd20_qm', 'csd20_mmff']:
-        _data = PhysDimeIMDataset(root='../dataProviders/data', processed_prefix=test_dataset.upper(),
-                                  pre_transform=my_pre_transform,
-                                  record_long_range=True)
-        test_index = _data.test_index
-        test_data_loader = torch.utils.data.DataLoader(
-            _data[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available(), shuffle=False)
-        test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
-                                             mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_dir, n_forward=n_forward)
-        E_pred = test_info['E_pred']
-        test_info_analyze(23.061 * E_pred, 23.061 * _data.data.E[test_index], test_dir, logger)
-    elif test_dataset.split('_')[0].split('[')[0] in ['qm9', 'frag9', 'frag9to20', 'qm9+extBond', 'conf20', "frag20",
-                                                      "dummy"]:
-        data_provider = get_test_set(test_dataset, args)
-        if isinstance(data_provider, tuple):
-            data_provider_test = data_provider[1]
-            data_provider = data_provider[0]
-        else:
-            data_provider_test = data_provider
-        val_index = data_provider.val_index
-        test_index = data_provider_test.test_index
-        logger.info("dataset: {}".format(data_provider.processed_file_names))
-        logger.info("valid size: {}".format(len(val_index)))
-        logger.info("test size: {}".format(len(test_index)))
-        if args.remove_atom_ids > 0:
-            _, val_index, _ = remove_atom_from_dataset(args.remove_atom_ids, data_provider, ("valid",),
-                                                       (None, val_index, None))
-            logger.info('removing B from test dataset...')
-            _, _, test_index = remove_atom_from_dataset(args.remove_atom_ids, data_provider_test, ('test',),
-                                                        (None, None, test_index))
-
-        if val_index is not None:
-            val_data_loader = torch.utils.data.DataLoader(
-                data_provider[torch.as_tensor(val_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
-                pin_memory=torch.cuda.is_available(), shuffle=False)
-            test_step(args, net, val_data_loader, len(val_index), loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                      dataset_name='{}_valid'.format(test_dataset), run_dir=test_dir, n_forward=n_forward,
-                      action=args.action)
-        test_data_loader = torch.utils.data.DataLoader(
-            data_provider_test[torch.as_tensor(test_index)], batch_size=args.valid_batch_size, collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available(), shuffle=False)
-        test_info, test_info_std = test_step(args, net, test_data_loader, len(test_index), loss_fn=loss_fn,
-                                             mae_fn=mae_fn, mse_fn=mse_fn, dataset_name='{}_test'.format(test_dataset),
-                                             run_dir=test_dir, n_forward=n_forward, action=args.action)
-        # if not os.path.exists(os.path.join(test_directory, 'loss.pt')):
-        #     loss = cal_loss(test_info, data_provider_test.data.E[test_index], data_provider_test.data.D[test_index],
-        #                     data_provider_test.data.Q[test_index], mae_fn=mae_fn, mse_fn=mse_fn)
-        #     torch.save(loss, os.path.join(test_directory, 'loss.pt'))
-        if "E_pred" in test_info:
-            E_pred = test_info['E_pred']
-            if test_info_std is not None:
-                E_pred_std = test_info_std['E_pred']
-            else:
-                E_pred_std = None
-            test_info_analyze(23.061 * E_pred, 23.061 * data_provider_test.data.E[test_index],
-                              test_dir, logger, pred_std=E_pred_std, x_forward=x_forward)
-    elif test_dataset.split(':')[0] == 'frag20n9':
-        data_provider = Frag9to20MixIMDataset(root='../dataProviders/data', split_settings=uniform_split,
-                                              pre_transform=my_pre_transform, frag20n9=True)
-        n_frag9_val = int(test_dataset.split(':')[1].split('+')[2])
-        n_frag20_val = int(test_dataset.split(':')[1].split('+')[3])
-        val_data_loader = torch.utils.data.DataLoader(
-            data_provider[108000: 108000 + n_frag9_val + n_frag20_val], batch_size=32, collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available(), shuffle=False)
-        test_data_loader = torch.utils.data.DataLoader(
-            data_provider[-1000:-500], batch_size=32, collate_fn=collate_fn,
-            pin_memory=torch.cuda.is_available(), shuffle=False)
-        val_step(net, val_data_loader, n_frag9_val + n_frag20_val, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                 dataset_name="{} validation set".format(test_dataset))
-        test_info = val_step(net, test_data_loader, 500, loss_fn=loss_fn, mae_fn=mae_fn, mse_fn=mse_fn,
-                             dataset_name="{} test set".format(test_dataset), detailed_info=True)
-        test_info_analyze(23.061 * test_info['E_pred'], 23.061 * test_info['E_target'], test_dir, logger)
-    else:
-        print('unrecognized test set: {}'.format(test_dataset))
-
-    if explicit_test is not None:
-        for name in ['diff', 'loss', 'loss_data']:
-            if osp.exists(osp.join(test_dir, '{}.pt'.format(name))):
-                shutil.move(osp.join(test_dir, '{}.pt'.format(name)),
-                            osp.join(test_dir, '{}_{}.pt'.format(name, explicit_test)))
-        shutil.copy(osp.join(test_dir, 'test.log'), osp.join(test_dir, 'test_{}.log'.format(explicit_test)))
-
-    # remove global variables
-    remove_handler(logger)
-    del parser
-    del args
-
-
-def cal_loss(pred, e_target, d_target, q_target, mae_fn, mse_fn):
-    result = {
-        'loss': None,
-        'emae': mae_fn(pred['E_pred'], e_target),
-        'ermse': torch.sqrt(mse_fn(pred['E_pred'], e_target)),
-        'pmae': mae_fn(pred['D_pred'], d_target),
-        'prmse': torch.sqrt(mse_fn(pred['D_pred'], d_target)),
-        'qmae': mae_fn(pred['Q_pred'], q_target),
-        'qrmse': torch.sqrt(mse_fn(pred['Q_pred'], q_target)),
-    }
-    return result
-
-
-def test_all():
-    parser = argparse.ArgumentParser()
-    # parser = add_parser_arguments(parser)
-    parser.add_argument('--folder_names', default='../PhysDimeTestTmp/exp*_run_*', type=str)
-    parser.add_argument('--x_forward', default=1, type=int)
-    parser.add_argument('--explicit_test', default=None, type=str)
-    parser.add_argument('--n_forward', default=25, type=int)
-    parser.add_argument('--use_exist', action="store_true")
-    _args = parser.parse_args()
-
-    run_dirs = glob.glob(_args.folder_names)
-
-    for name in run_dirs:
-        print('testing folder: {}'.format(name))
-        test_folder(name, _args.n_forward, _args.x_forward, _args.explicit_test, _args.use_exist)
-
-
-# def uncertainty_figure(run_dir):
-#     diff = torch.load(os.path.join(run_dir, 'diff.pt'))
-#     std_path = glob.glob(os.path.join(run_dir, '*test-std*pt'))[0]
-#     std = torch.load(std_path)
-#     print_scatter(std['E_pred'], diff, "Energy", "kcal / mol", run_dir)
-#     return
 
 
 if __name__ == "__main__":

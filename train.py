@@ -3,9 +3,11 @@ import sys
 import argparse
 import logging
 import os
+import re
 import os.path as osp
 import shutil
 import time
+from collections import OrderedDict
 from copy import copy
 from datetime import datetime
 
@@ -29,9 +31,6 @@ from utils.LossFn import LossFn
 from utils.time_meta import print_function_runtime
 from utils.utils_functions import device, add_parser_arguments, floating_type, kwargs_solver, get_lr, collate_fn, \
     get_n_params, atom_mean_std, remove_handler, option_solver
-
-default_kwargs = {'root': '../dataProviders/data', 'pre_transform': my_pre_transform, 'record_long_range': True,
-                  'type_3_body': 'B', 'cal_3body_term': True}
 
 
 def data_provider_solver(name_full, _kw_args):
@@ -143,15 +142,16 @@ def train_step(model, _optimizer, data_batch, loss_fn, max_norm, warm_up_schedul
     return result_loss
 
 
-def val_step_new(model, _data_loader, loss_fn):
+def val_step_new(model, _data_loader, loss_fn, is_testing=False):
     model.eval()
     valid_size = 0
     loss = 0.
     detail = None
     for val_data in _data_loader:
-        _batch_size = len(val_data.E)
+        _batch_size = len(val_data.N)
         E_pred, F_pred, Q_pred, D_pred, loss_nh = model(val_data)
-        aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data, requires_detail=True)
+        aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data,
+                                         loss_detail=True, diff_detail=is_testing)
         loss += aggr_loss.item() * _batch_size
         valid_size += _batch_size
 
@@ -159,13 +159,25 @@ def val_step_new(model, _data_loader, loss_fn):
             # -----init------ #
             detail = copy(loss_detail)
             for key in detail:
-                detail[key] = 0.
+                if key.startswith("MAE") or key.startswith("RMSE"):
+                    detail[key] = 0.
+                elif key.startswith("DIFF"):
+                    detail[key] = []
+                else:
+                    raise ValueError("invalid key: " + key)
 
         for key in detail:
-            detail[key] += loss_detail[key] * _batch_size
+            if key.startswith("MAE") or key.startswith("RMSE"):
+                detail[key] += loss_detail[key] * _batch_size
+            elif key.startswith("DIFF"):
+                detail[key].extend(loss_detail[key])
+
     loss /= valid_size
     for key in detail:
-        detail[key] /= valid_size
+        if key.startswith("MAE") or key.startswith("RMSE"):
+            detail[key] /= valid_size
+        elif key.startswith("DIFF"):
+            detail[key] = torch.cat(detail[key], dim=0)
     detail["loss"] = loss
     return detail
 
@@ -175,7 +187,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
     # ------------------- variable set up ---------------------- #
     net_kwargs = kwargs_solver(config_args)
     config_dict = vars(config_args)
-    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes"]:
+    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes", "reset_output_layers"]:
         config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
     config_dict["use_trained_model"] = config_dict["use_trained_model"]\
         if config_dict["use_trained_model"].lower() != "false" else False
@@ -281,18 +293,31 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
     # restore pretrained model
     if config_dict["use_trained_model"]:
         trained_model_dir = glob.glob(config_dict["use_trained_model"])[0]
-        logger.info('using trained model: {}'.format(config_dict["use_trained_model"]))
+        logger.info('using trained model: {}'.format(trained_model_dir))
+        train_model_path = osp.join(trained_model_dir, 'training_model.pt')
+        if not osp.exists(train_model_path):
+            train_model_path = osp.join(trained_model_dir, 'best_model.pt')
+        best_model_path = osp.join(trained_model_dir, 'best_model.pt')
+        for _net, _model_path in zip([net, shadow_net], [train_model_path, best_model_path]):
+            state_dict = torch.load(_model_path, map_location=device)
+            if config_dict["reset_output_layers"]:
+                # OrderedDict is immutable so I have to make a copy
+                new_state_dict = OrderedDict()
+                shift_reg = re.compile(r"shift.*")
+                scale_reg = re.compile(r"scale.*")
+                output_reg = re.compile(r"module.*\.output\.lin\..*")
+                for key in state_dict:
+                    keep = True
+                    for reg in [shift_reg, scale_reg, output_reg]:
+                        if reg.fullmatch(key) is not None:
+                            keep = False
+                    if keep:
+                        new_state_dict[key] = state_dict[key]
+                state_dict = new_state_dict
+            incompatible_keys = _net.load_state_dict(state_dict=state_dict, strict=False)
 
-        if os.path.exists(os.path.join(trained_model_dir, 'training_model.pt')):
-            net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'training_model.pt'), map_location=device),
-                                strict=False)
-        else:
-            net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'best_model.pt'), map_location=device),
-                                strict=False)
-        incompatible_keys = shadow_net.load_state_dict(torch.load(os.path.join(trained_model_dir, 'best_model.pt'),
-                                                                  map_location=device), strict=False)
-        logger.info("---------incompatible keys-----------")
-        logger.info(str(incompatible_keys))
+            logger.info("---------incompatible keys-----------")
+            logger.info(str(incompatible_keys))
     else:
         trained_model_dir = None
 
@@ -370,7 +395,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
         if use_tqdm:
             loader = tqdm(loader, "epoch: {}".format(epoch))
         for batch_num, data in loader:
-            this_size = data.E.shape[0]
+            this_size = data.N.shape[0]
 
             train_loss += train_step(net, _optimizer=optimizer, data_batch=data, loss_fn=loss_fn,
                                      max_norm=config_dict["max_norm"],
@@ -439,6 +464,8 @@ def main():
         args, unknown = parser.parse_known_args(["@" + config_name])
     args.config_name = config_name
 
+    default_kwargs = {'root': args.data_root, 'pre_transform': my_pre_transform, 'record_long_range': True,
+                      'type_3_body': 'B', 'cal_3body_term': True}
     data_provider_class, _kwargs = data_provider_solver(args.data_provider, default_kwargs)
     _kwargs = _add_arg_from_config(_kwargs, args)
     data_provider = data_provider_class(**_kwargs)

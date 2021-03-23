@@ -22,7 +22,7 @@ class LossFn:
             if "octEnergy" in self.target_names:
                 self.target_names.append("CalcOct")
 
-    def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, requires_detail=False):
+    def __call__(self, E_pred, F_pred, Q_pred, D_pred, data, loss_detail=False, diff_detail=False):
         if self.action in ["names", "names_and_QD"]:
             E_tgt, E_pred = self._get_target(E_pred, data)
 
@@ -30,10 +30,12 @@ class LossFn:
             rmse_loss = torch.sqrt(torch.mean((E_pred - E_tgt)**2, dim=0, keepdim=True))
 
             total_loss = mae_loss.sum()
-            if requires_detail:
+            if loss_detail:
                 detail = {"MAE_{}".format(name): mae_loss[:, i].item() for i, name in enumerate(self.target_names)}
                 for i, name in enumerate(self.target_names):
                     detail["RMSE_{}".format(name)] = rmse_loss[:, i].item()
+                    if diff_detail:
+                        detail["DIFF_{}".format(name)] = [(E_pred - E_tgt)[:, i].detach().cpu().view(-1)]
             else:
                 detail = None
 
@@ -41,11 +43,14 @@ class LossFn:
                 q_mae = torch.mean(torch.abs(Q_pred - data.Q))
                 d_mae = torch.mean(torch.abs(D_pred - data.D))
                 total_loss = total_loss + self.w_q * q_mae + self.w_d * d_mae
-                if requires_detail:
+                if loss_detail:
                     detail["MAE_Q"] = q_mae.item()
                     detail["MAE_D"] = d_mae.item()
+                    if diff_detail:
+                        detail["DIFF_Q"] = [(Q_pred - data.Q).detach().cpu().view(-1)]
+                        detail["DIFF_D"] = [(D_pred - data.D).detach().cpu().view(-1)]
 
-            if requires_detail:
+            if loss_detail:
                 return total_loss, detail
             else:
                 return total_loss
@@ -64,7 +69,7 @@ class LossFn:
 
             D_loss = self.w_d * torch.mean(torch.abs(D_pred - data.D))
 
-            if requires_detail:
+            if loss_detail:
                 return E_loss + F_loss + Q_loss + D_loss, {"MAE_E": E_loss.item(), "MAE_F": F_loss,
                                                            "MAE_Q": Q_loss.item(), "MAE_D": D_loss.item()}
             else:
