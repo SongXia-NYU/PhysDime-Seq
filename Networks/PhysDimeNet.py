@@ -1,24 +1,22 @@
 import math
-import time
 
 import torch
 import torch.nn as nn
+from torch_scatter import scatter
 
 from DataPrepareUtils import cal_msg_edge_index
+from Networks.DimeLayers.DimeModule import DimeModule
 from Networks.PhysLayers.CoulombLayer import CoulombLayer
 from Networks.PhysLayers.D3DispersionLayer import D3DispersionLayer
+from Networks.PhysLayers.PhysModule import PhysModule
 from Networks.SharedLayers.AtomToEdgeLayer import AtomToEdgeLayer
 from Networks.SharedLayers.EdgeToAtomLayer import EdgeToAtomLayer
 from Networks.SharedLayers.EmbeddingLayer import EmbeddingLayer
-from Networks.DimeLayers.DimeModule import DimeModule
-from Networks.PhysLayers.PhysModule import PhysModule
 from Networks.UncertaintyLayers.MCDropout import ConcreteDropout
 from utils.BesselCalculator import bessel_expansion_raw
 from utils.BesselCalculatorFast import BesselCalculator
-from utils.time_meta import record_data, print_function_runtime
-from utils.utils_functions import floating_type, device, dime_edge_expansion, phys_edge_expansion, softplus_inverse, \
+from utils.utils_functions import floating_type, device, dime_edge_expansion, softplus_inverse, \
     gaussian_rbf, info_resolver, expansion_splitter, error_message, option_solver
-from torch_scatter import scatter
 
 
 class PhysDimeNet(nn.Module):
@@ -54,7 +52,10 @@ class PhysDimeNet(nn.Module):
                  energy_scale=None,
                  debug_mode=False,
                  action="E",
-                 target_names=None):
+                 target_names=None,
+                 batch_norm=False,
+                 dropout=False,
+                 **kwargs):
         """
         
         :param n_atom_embedding: number of atoms to embed, usually set to 95
@@ -68,6 +69,10 @@ class PhysDimeNet(nn.Module):
         :param debug_mode: 
         """
         super().__init__()
+
+        print("------unused keys-----")
+        for key in kwargs:
+            print("{}: {}".format(key, kwargs[key]))
 
         # convert input into a dictionary
         self.target_names = target_names
@@ -209,7 +214,9 @@ class PhysDimeNet(nn.Module):
                                          n_res_output=n_phys_output_res,
                                          activation=self.activations[i],
                                          uncertainty_modify=uncertainty_modify,
-                                         n_read_out=int(_options['n_read_out']) if 'n_read_out' in _options else 0)
+                                         n_read_out=int(_options['n_read_out']) if 'n_read_out' in _options else 0,
+                                         batch_norm=batch_norm,
+                                         dropout=dropout)
                 if self.uncertainty_modify == 'concreteDropoutModule':
                     this_module = ConcreteDropout(this_module, module_type='PhysNet')
                 self.add_module('module{}'.format(i), this_module)

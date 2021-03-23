@@ -14,7 +14,9 @@ class _OutputLayer(torch.nn.Module):
     The output layer(red one in paper) of PhysNet
     """
 
-    def __init__(self, F, n_output, n_res_output, activation, uncertainty_modify, n_read_out=0):
+    def __init__(self, F, n_output, n_res_output, activation, uncertainty_modify, n_read_out=0, batch_norm=False,
+                 dropout=False):
+        self.batch_norm = batch_norm
         super().__init__()
         self.concrete_dropout = (uncertainty_modify.split('[')[0] == "concreteDropoutOutput")
         self.dropout_options = option_solver(uncertainty_modify)
@@ -31,7 +33,8 @@ class _OutputLayer(torch.nn.Module):
         self.n_res_output = n_res_output
         self.n_read_out = n_read_out
         for i in range(n_res_output):
-            self.add_module('res_layer' + str(i), ResidualLayer(F, activation, concrete_dropout=False))
+            self.add_module('res_layer' + str(i), ResidualLayer(F, activation, concrete_dropout=False,
+                                                                batch_norm=batch_norm, dropout=dropout))
 
         # Readout layers
         dim_decay = True  # this is for compatibility issues, always set to True otherwise
@@ -40,18 +43,24 @@ class _OutputLayer(torch.nn.Module):
         last_dim = F
         for i in range(n_read_out):
             if dim_decay:
-                read_out_i = torch.nn.Linear(last_dim, ceil(last_dim/2))
-                last_dim = ceil(last_dim/2)
+                this_dim = ceil(last_dim/2)
+                read_out_i = torch.nn.Linear(last_dim, this_dim)
+                last_dim = this_dim
             else:
                 read_out_i = torch.nn.Linear(last_dim, last_dim)
+                this_dim = last_dim
             if self.concrete_dropout:
                 read_out_i = ConcreteDropout(read_out_i, module_type='Linear', **self.dropout_options)
             self.add_module('read_out{}'.format(i), read_out_i)
+            if self.batch_norm:
+                self.add_module("bn_{}".format(i), torch.nn.BatchNorm1d(last_dim))
 
         self.lin = torch.nn.Linear(last_dim, n_output, bias=False)
         self.lin.weight.data.zero_()
         if self.concrete_dropout:
             self.lin = ConcreteDropout(self.lin, module_type='Linear', **self.dropout_options)
+        if self.batch_norm:
+            self.bn_last = torch.nn.BatchNorm1d(last_dim)
 
         self.activation = activation_getter(activation)
 
@@ -61,20 +70,25 @@ class _OutputLayer(torch.nn.Module):
 
         for i in range(self.n_res_output):
             tmp_res = self._modules['res_layer' + str(i)](tmp_res)
-        a = self.activation(tmp_res)
+        out = tmp_res
 
         for i in range(self.n_read_out):
+            if self.batch_norm:
+                out = self._modules["bn_{}".format(i)](out)
+            a = self.activation(out)
             out = self._modules['read_out{}'.format(i)](a)
             if self.concrete_dropout:
                 regularization = regularization + out[1]
                 out = out[0]
-            a = self.activation(out)
 
+        if self.batch_norm:
+            out = self.bn_last(out)
+        out = self.activation(out)
         if self.concrete_dropout:
-            out, reg = self.lin(a)
+            out, reg = self.lin(out)
             regularization = regularization + reg
         else:
-            out = self.lin(a)
+            out = self.lin(out)
         return out, regularization
 
 
@@ -84,15 +98,16 @@ class PhysModule(torch.nn.Module):
     """
 
     def __init__(self, F, K, n_output, n_res_atomic, n_res_interaction, n_res_output, activation, uncertainty_modify,
-                 n_read_out):
+                 n_read_out, batch_norm, dropout):
         super().__init__()
-        self.interaction = InteractionModule(F=F, K=K, n_res_interaction=n_res_interaction, activation=activation)
+        self.interaction = InteractionModule(F=F, K=K, n_res_interaction=n_res_interaction, activation=activation,
+                                             batch_norm=batch_norm, dropout=dropout)
         self.n_res_atomic = n_res_atomic
         for i in range(n_res_atomic):
-            self.add_module('res_layer' + str(i), ResidualLayer(F, activation))
+            self.add_module('res_layer' + str(i), ResidualLayer(F, activation, batch_norm=batch_norm, dropout=dropout))
         self.output = _OutputLayer(F=F, n_output=n_output, n_res_output=n_res_output, activation=activation,
-                                   uncertainty_modify=uncertainty_modify,
-                                   n_read_out=n_read_out)
+                                   uncertainty_modify=uncertainty_modify, n_read_out=n_read_out, batch_norm=batch_norm,
+                                   dropout=dropout)
 
     def forward(self, x, edge_index, edge_attr):
         interacted_x, _ = self.interaction(x, edge_index, edge_attr)
@@ -111,6 +126,4 @@ class PhysModule(torch.nn.Module):
 
 
 if __name__ == '__main__':
-    phys_net = PhysModule(160, 32, 2, 1, 1, 1, 'shifted_soft_plus')
-    print(get_n_params(phys_net))
-    print('finished')
+    pass

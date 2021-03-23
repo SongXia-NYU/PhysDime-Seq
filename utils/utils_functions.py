@@ -628,6 +628,7 @@ def option_solver(option_txt):
 
 
 def kwargs_solver(args):
+    # TODO remove these bullshit
     debug_mode = (args.debug_mode.lower() == 'true')
     normalize = (args.normalize.lower() == 'true')
     shared_normalize_param = (args.shared_normalize_param.lower() == 'true')
@@ -735,6 +736,8 @@ def add_parser_arguments(parser):
                         help="Add extra nodes (fake atoms) for each target, the result of each target will be the "
                              "aggregated repr of each node.")
     parser.add_argument("--reset_output_layers", type=str, default="False")
+    parser.add_argument("--batch_norm", type=str, default="False")
+    parser.add_argument("--dropout", type=str, default="False")
     return parser
 
 

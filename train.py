@@ -185,13 +185,17 @@ def val_step_new(model, _data_loader, loss_fn, is_testing=False):
 def train(config_args, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
 
     # ------------------- variable set up ---------------------- #
-    net_kwargs = kwargs_solver(config_args)
     config_dict = vars(config_args)
-    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes", "reset_output_layers"]:
+    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes", "reset_output_layers",
+                     "normalize", "shared_normalize_param", "restrain_non_bond_pred",
+                     "coulomb_charge_correct", "batch_norm"]:
         config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
     config_dict["use_trained_model"] = config_dict["use_trained_model"]\
         if config_dict["use_trained_model"].lower() != "false" else False
     config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
+    config_dict["n_atom_embedding"] = 95
+
+    net_kwargs = config_dict
 
     # ----------------- set up run directory -------------------- #
     while True:
@@ -206,9 +210,8 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
     shutil.copyfile(config_dict["config_name"], os.path.join(run_directory, config_dict["config_name"]))
 
     # --------------------- Logger setup ---------------------------- #
-    logging.basicConfig(filename=os.path.join(run_directory, config_dict["log_file_name"]),
-                        format='%(asctime)s %(message)s',
-                        filemode='w')
+    logging.basicConfig(filename=osp.join(run_directory, config_dict["log_file_name"]),
+                        format='%(asctime)s %(message)s', filemode='w')
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
