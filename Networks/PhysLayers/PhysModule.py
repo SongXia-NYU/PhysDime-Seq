@@ -53,14 +53,14 @@ class _OutputLayer(torch.nn.Module):
                 read_out_i = ConcreteDropout(read_out_i, module_type='Linear', **self.dropout_options)
             self.add_module('read_out{}'.format(i), read_out_i)
             if self.batch_norm:
-                self.add_module("bn_{}".format(i), torch.nn.BatchNorm1d(last_dim))
+                self.add_module("bn_{}".format(i), torch.nn.BatchNorm1d(last_dim, momentum=1.))
 
         self.lin = torch.nn.Linear(last_dim, n_output, bias=False)
         self.lin.weight.data.zero_()
         if self.concrete_dropout:
             self.lin = ConcreteDropout(self.lin, module_type='Linear', **self.dropout_options)
         if self.batch_norm:
-            self.bn_last = torch.nn.BatchNorm1d(last_dim)
+            self.bn_last = torch.nn.BatchNorm1d(last_dim, momentum=1.)
 
         self.activation = activation_getter(activation)
 

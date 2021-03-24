@@ -19,13 +19,13 @@ class ResidualLayer(nn.Module):
         self.lin1.weight.data = semi_orthogonal_glorot_weights(F, F)
         self.lin1.bias.data.zero_()
         if self.batch_norm:
-            self.bn1 = nn.BatchNorm1d(F)
+            self.bn1 = nn.BatchNorm1d(F, momentum=1.)
 
         self.lin2 = nn.Linear(F, F)
         self.lin2.weight.data = semi_orthogonal_glorot_weights(F, F)
         self.lin2.bias.data.zero_()
         if self.batch_norm:
-            self.bn2 = nn.BatchNorm1d(F)
+            self.bn2 = nn.BatchNorm1d(F, momentum=1.)
 
         if self.concrete_dropout:
             self.lin1 = ConcreteDropout(self.lin1, module_type='Linear')

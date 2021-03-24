@@ -30,7 +30,7 @@ class InteractionModule(nn.Module):
 
         self.batch_norm = batch_norm
         if self.batch_norm:
-            self.bn = nn.BatchNorm1d(F)
+            self.bn = nn.BatchNorm1d(F, momentum=1.)
         self.lin_last = nn.Linear(F, F)
         self.lin_last.weight.data = semi_orthogonal_glorot_weights(F, F)
         self.lin_last.bias.data.zero_()
@@ -68,8 +68,8 @@ class MessagePassingLayer(torch_geometric.nn.MessagePassing):
         self.lin_for_diff.bias.data.zero_()
 
         if self.batch_norm:
-            self.bn_same = nn.BatchNorm1d(F)
-            self.bn_diff = nn.BatchNorm1d(F)
+            self.bn_same = nn.BatchNorm1d(F, momentum=1.)
+            self.bn_diff = nn.BatchNorm1d(F, momentum=1.)
 
         self.G = nn.Linear(K, F, bias=False)
         self.G.weight.data.zero_()
