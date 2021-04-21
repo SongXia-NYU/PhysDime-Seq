@@ -189,14 +189,6 @@ def val_step_new(model, _data_loader, loss_fn, is_testing=False):
 
 def train(config_dict, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
 
-    # ----------------- dataset process on the fly --------------- #
-    for name in ["gasEnergy", "watEnergy", "octEnergy"]:
-        if name in data_provider:
-            subtract_ref(data_provider[0], None, data_root=config_dict["data_root"])
-            print(getattr(data_provider[0], name).max())
-            print(getattr(data_provider[0], name).min())
-            break
-
     # ------------------- variable set up ---------------------- #
 
     config_dict = preprocess_config(config_dict)
@@ -221,6 +213,14 @@ def train(config_dict, data_provider, explicit_split=None, ignore_valid=False, u
 
     # -------------------- Meta data file set up -------------------- #
     meta_data_name = os.path.join(run_directory, 'meta.txt')
+
+    # ----------------- dataset process on the fly --------------- #
+    for name in ["gasEnergy", "watEnergy", "octEnergy"]:
+        if name in data_provider:
+            subtract_ref(data_provider[0], None, data_root=config_dict["data_root"])
+            logger.info(getattr(data_provider[0], name).max())
+            logger.info(getattr(data_provider[0], name).min())
+            break
 
     # -------------- Index file and remove specific atoms ------------ #
     if explicit_split is not None:
