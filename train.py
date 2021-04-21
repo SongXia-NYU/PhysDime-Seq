@@ -216,10 +216,10 @@ def train(config_dict, data_provider, explicit_split=None, ignore_valid=False, u
 
     # ----------------- dataset process on the fly --------------- #
     for name in ["gasEnergy", "watEnergy", "octEnergy"]:
-        if name in data_provider:
-            subtract_ref(data_provider[0], None, data_root=config_dict["data_root"])
-            logger.info(getattr(data_provider[0], name).max())
-            logger.info(getattr(data_provider[0], name).min())
+        if name in data_provider[0]:
+            subtract_ref(data_provider, None, data_root=config_dict["data_root"])
+            logger.info(name+": "+getattr(data_provider[0], name).max())
+            logger.info(name+": "+getattr(data_provider[0], name).min())
             break
 
     # -------------- Index file and remove specific atoms ------------ #
