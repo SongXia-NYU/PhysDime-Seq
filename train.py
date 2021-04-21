@@ -218,8 +218,8 @@ def train(config_dict, data_provider, explicit_split=None, ignore_valid=False, u
     for name in ["gasEnergy", "watEnergy", "octEnergy"]:
         if name in data_provider[0]:
             subtract_ref(data_provider, None, data_root=config_dict["data_root"])
-            logger.info("{} max: {}".format(name, getattr(data_provider[0], name).max().item()))
-            logger.info("{} min: {}".format(name, getattr(data_provider[0], name).min().item()))
+            logger.info("{} max: {}".format(name, getattr(data_provider, name).max().item()))
+            logger.info("{} min: {}".format(name, getattr(data_provider, name).min().item()))
             break
 
     # -------------- Index file and remove specific atoms ------------ #
