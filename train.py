@@ -22,14 +22,14 @@ from DummyIMDataset import DummyIMDataset
 from Frag9to20MixIMDataset import Frag9to20MixIMDataset, uniform_split, small_split, large_split
 from Frag20IMDataset import Frag20IMDataset
 from Networks.PhysDimeNet import PhysDimeNet
-from DataPrepareUtils import my_pre_transform, remove_atom_from_dataset
+from DataPrepareUtils import my_pre_transform, remove_atom_from_dataset, subtract_ref
 from Networks.UncertaintyLayers.swag import SWAG
 from PhysDimeIMDataset import PhysDimeIMDataset
 from qm9InMemoryDataset import Qm9InMemoryDataset
 from utils.Optimizers import EmaAmsGrad, MySGD
 from utils.LossFn import LossFn
 from utils.time_meta import print_function_runtime
-from utils.utils_functions import device, add_parser_arguments, floating_type, kwargs_solver, get_lr, collate_fn, \
+from utils.utils_functions import device, add_parser_arguments, floating_type, preprocess_config, get_lr, collate_fn, \
     get_n_params, atom_mean_std, remove_handler, option_solver
 
 
@@ -149,53 +149,57 @@ def val_step_new(model, _data_loader, loss_fn, is_testing=False):
     detail = None
     for val_data in _data_loader:
         _batch_size = len(val_data.N)
-        E_pred, F_pred, Q_pred, D_pred, loss_nh = model(val_data)
+        E_pred, F_pred, Q_pred, D_pred, loss_nh, *extra = model(val_data)
         aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data,
                                          loss_detail=True, diff_detail=is_testing)
         loss += aggr_loss.item() * _batch_size
-        valid_size += _batch_size
-
         if detail is None:
             # -----init------ #
             detail = copy(loss_detail)
+            if is_testing:
+                detail["EMBEDDING"] = []
+                detail["ATOM_MOL_BATCH"] = []
+                detail["ATOM_Z"] = []
             for key in detail:
                 if key.startswith("MAE") or key.startswith("RMSE"):
                     detail[key] = 0.
                 elif key.startswith("DIFF"):
                     detail[key] = []
-                else:
-                    raise ValueError("invalid key: " + key)
 
         for key in detail:
             if key.startswith("MAE") or key.startswith("RMSE"):
                 detail[key] += loss_detail[key] * _batch_size
             elif key.startswith("DIFF"):
-                detail[key].extend(loss_detail[key])
+                detail[key].append(loss_detail[key])
+        if is_testing:
+            detail["EMBEDDING"].append(extra[0].detach().cpu())
+            detail["ATOM_MOL_BATCH"].append(extra[1].detach().cpu()+valid_size)
+            detail["ATOM_Z"].append(extra[2].detach().cpu())
+        valid_size += _batch_size
 
     loss /= valid_size
     for key in detail:
         if key.startswith("MAE") or key.startswith("RMSE"):
             detail[key] /= valid_size
-        elif key.startswith("DIFF"):
+        elif key.startswith("DIFF") or key in ["EMBEDDING", "ATOM_MOL_BATCH", "ATOM_Z"]:
             detail[key] = torch.cat(detail[key], dim=0)
     detail["loss"] = loss
     return detail
 
 
-def train(config_args, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
+def train(config_dict, data_provider, explicit_split=None, ignore_valid=False, use_tqdm=False):
+
+    # ----------------- dataset process on the fly --------------- #
+    for name in ["gasEnergy", "watEnergy", "octEnergy"]:
+        if name in data_provider:
+            subtract_ref(data_provider[0], None, data_root=config_dict["data_root"])
+            print(getattr(data_provider[0], name).max())
+            print(getattr(data_provider[0], name).min())
+            break
 
     # ------------------- variable set up ---------------------- #
-    config_dict = vars(config_args)
-    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes", "reset_output_layers",
-                     "normalize", "shared_normalize_param", "restrain_non_bond_pred",
-                     "coulomb_charge_correct", "batch_norm"]:
-        config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
-    config_dict["use_trained_model"] = config_dict["use_trained_model"]\
-        if config_dict["use_trained_model"].lower() != "false" else False
-    config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
-    config_dict["n_atom_embedding"] = 95
 
-    net_kwargs = config_dict
+    config_dict = preprocess_config(config_dict)
 
     # ----------------- set up run directory -------------------- #
     while True:
@@ -276,11 +280,11 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
     E_atomic_scale = std_atom
     E_atomic_shift = mean_atom
 
-    net_kwargs['energy_shift'] = E_atomic_shift
-    net_kwargs['energy_scale'] = E_atomic_scale
+    config_dict['energy_shift'] = E_atomic_shift
+    config_dict['energy_scale'] = E_atomic_scale
 
-    net = PhysDimeNet(**net_kwargs)
-    shadow_net = PhysDimeNet(**net_kwargs)
+    net = PhysDimeNet(**config_dict)
+    shadow_net = PhysDimeNet(**config_dict)
     net = net.to(device)
     net = net.type(floating_type)
     shadow_net = shadow_net.to(device)
@@ -288,7 +292,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
     shadow_net.load_state_dict(net.state_dict())
 
     if config_dict["use_swag"]:
-        dummy_model = PhysDimeNet(**net_kwargs).to(device).type(floating_type)
+        dummy_model = PhysDimeNet(**config_dict).to(device).type(floating_type)
         swag_model = SWAG(dummy_model, no_cov_mat=False, max_num_models=20)
     else:
         swag_model = None
@@ -364,8 +368,8 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
         f.write('train data index:{} ...\n'.format(train_index[:100]))
         f.write('val data index:{} ...\n'.format(val_index[:100]))
         # f.write('test data index:{} ...\n'.format(test_index[:100]))
-        for _key in net_kwargs.keys():
-            f.write("{} = {}\n".format(_key, net_kwargs[_key]))
+        for _key in config_dict.keys():
+            f.write("{} = {}\n".format(_key, config_dict[_key]))
 
     # ---------------------- Training ----------------------- #
     logger.info('start training...')
@@ -445,7 +449,7 @@ def train(config_args, data_provider, explicit_split=None, ignore_valid=False, u
 
 def _add_arg_from_config(_kwargs, config_args):
     for attr_name in ['edge_version', 'cutoff', 'boundary_factor']:
-        _kwargs[attr_name] = getattr(config_args, attr_name)
+        _kwargs[attr_name] = config_args[attr_name]
     return _kwargs
 
 
@@ -470,6 +474,7 @@ def main():
     default_kwargs = {'root': args.data_root, 'pre_transform': my_pre_transform, 'record_long_range': True,
                       'type_3_body': 'B', 'cal_3body_term': True}
     data_provider_class, _kwargs = data_provider_solver(args.data_provider, default_kwargs)
+    args = vars(args)
     _kwargs = _add_arg_from_config(_kwargs, args)
     data_provider = data_provider_class(**_kwargs)
     train(args, data_provider)

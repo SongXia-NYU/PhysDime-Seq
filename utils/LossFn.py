@@ -35,7 +35,7 @@ class LossFn:
                 for i, name in enumerate(self.target_names):
                     detail["RMSE_{}".format(name)] = rmse_loss[:, i].item()
                     if diff_detail:
-                        detail["DIFF_{}".format(name)] = [(E_pred - E_tgt)[:, i].detach().cpu().view(-1)]
+                        detail["DIFF_{}".format(name)] = (E_pred - E_tgt)[:, i].detach().cpu().view(-1)
             else:
                 detail = None
 
@@ -47,8 +47,8 @@ class LossFn:
                     detail["MAE_Q"] = q_mae.item()
                     detail["MAE_D"] = d_mae.item()
                     if diff_detail:
-                        detail["DIFF_Q"] = [(Q_pred - data.Q).detach().cpu().view(-1)]
-                        detail["DIFF_D"] = [(D_pred - data.D).detach().cpu().view(-1)]
+                        detail["DIFF_Q"] = (Q_pred - data.Q).detach().cpu().view(-1)
+                        detail["DIFF_D"] = (D_pred - data.D).detach().cpu().view(-1)
 
             if loss_detail:
                 return total_loss, detail
@@ -71,7 +71,8 @@ class LossFn:
 
             if loss_detail:
                 return E_loss + F_loss + Q_loss + D_loss, {"MAE_E": E_loss.item(), "MAE_F": F_loss,
-                                                           "MAE_Q": Q_loss.item(), "MAE_D": D_loss.item()}
+                                                           "MAE_Q": Q_loss.item(), "MAE_D": D_loss.item(),
+                                                           "DIFF_E": (E_pred - data.E).detach().cpu().view(-1)}
             else:
                 return E_loss + F_loss + Q_loss + D_loss
         else:

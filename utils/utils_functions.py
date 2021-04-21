@@ -627,39 +627,16 @@ def option_solver(option_txt):
                 for argument in option_txt.split(',')}
 
 
-def kwargs_solver(args):
-    # TODO remove these bullshit
-    debug_mode = (args.debug_mode.lower() == 'true')
-    normalize = (args.normalize.lower() == 'true')
-    shared_normalize_param = (args.shared_normalize_param.lower() == 'true')
-    restrain_non_bond_pred = (args.restrain_non_bond_pred.lower() == 'true')
-    coulomb_charge_correct = (args.coulomb_charge_correct.lower() == 'true')
-
-    DNNKwargs = {'n_atom_embedding': 95,
-                 'n_feature': args.n_feature,
-                 'n_output': args.n_output,
-                 'n_dime_before_residual': args.n_dime_before_residual,
-                 'n_dime_after_residual': args.n_dime_after_residual,
-                 'n_output_dense': args.n_output_dense,
-                 'n_phys_atomic_res': args.n_phys_atomic_res,
-                 'n_phys_interaction_res': args.n_phys_interaction_res,
-                 'n_phys_output_res': args.n_phys_output_res,
-                 'n_bi_linear': args.n_bi_linear,
-                 'nh_lambda': args.nh_lambda,
-                 'normalize': normalize,
-                 'debug_mode': debug_mode,
-                 'activations': args.activations,
-                 'shared_normalize_param': shared_normalize_param,
-                 'restrain_non_bond_pred': restrain_non_bond_pred,
-                 'expansion_fn': args.expansion_fn,
-                 'modules': args.modules,
-                 'bonding_type': args.bonding_type,
-                 'uncertainty_modify': args.uncertainty_modify,
-                 'coulomb_charge_correct': coulomb_charge_correct,
-                 'action': args.action,
-                 'target_names': args.target_names
-                 }
-    return DNNKwargs
+def preprocess_config(config_dict):
+    for bool_key in ["debug_mode", "auto_sol", "reset_optimizer", "target_nodes", "reset_output_layers",
+                     "normalize", "shared_normalize_param", "restrain_non_bond_pred",
+                     "coulomb_charge_correct", "batch_norm"]:
+        config_dict[bool_key] = (config_dict[bool_key].lower() != "false")
+    config_dict["use_trained_model"] = config_dict["use_trained_model"] \
+        if config_dict["use_trained_model"].lower() != "false" else False
+    config_dict["use_swag"] = (config_dict["uncertainty_modify"].split('_')[0] == 'swag')
+    config_dict["n_atom_embedding"] = 95
+    return config_dict
 
 
 def add_parser_arguments(parser):

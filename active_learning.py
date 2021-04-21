@@ -14,7 +14,7 @@ from Networks.PhysDimeNet import PhysDimeNet
 from test import test_folder, test_step, test_info_analyze
 from train import data_provider_solver, train, _add_arg_from_config
 from utils.LossFn import LossFn
-from utils.utils_functions import add_parser_arguments, kwargs_solver, device, floating_type, collate_fn
+from utils.utils_functions import add_parser_arguments, preprocess_config, device, floating_type, collate_fn
 
 
 def active_main():
@@ -84,7 +84,7 @@ def active_main():
             train_dir = glob.glob(osp.join(run_dir, 'cycle{}_run_*'.format(cycle-1)))[0]
         else:
             train_dir = glob.glob(config_args.use_trained_model)[0]
-        net_kwargs = kwargs_solver(config_args)
+        net_kwargs = preprocess_config(config_args)
         net = PhysDimeNet(**net_kwargs).to(device).type(floating_type)
         net.load_state_dict(torch.load(osp.join(train_dir, 'best_model.pt')))
         w_e, w_f, w_q, w_p = 1, config_args.force_weight, config_args.charge_weight, config_args.dipole_weight

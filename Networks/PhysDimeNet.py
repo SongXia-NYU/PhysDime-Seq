@@ -55,6 +55,7 @@ class PhysDimeNet(nn.Module):
                  target_names=None,
                  batch_norm=False,
                  dropout=False,
+                 requires_embedding=False,
                  **kwargs):
         """
         
@@ -69,11 +70,11 @@ class PhysDimeNet(nn.Module):
         :param debug_mode: 
         """
         super().__init__()
-
         print("------unused keys-----")
         for key in kwargs:
             print("{}: {}".format(key, kwargs[key]))
 
+        self.requires_embedding = requires_embedding
         # convert input into a dictionary
         self.target_names = target_names
         self.action = action
@@ -472,9 +473,9 @@ class PhysDimeNet(nn.Module):
 
         # t0 = record_data('atom prop to molecule', t0)
 
-        Q_pred = None
-        D_pred = None
-        F_pred = None
+        Q_pred = 0.
+        D_pred = 0.
+        F_pred = 0.
         if self.n_output > 1:
             # the last property is considered as atomic charge prediction
             Q_pred = mol_pred_properties[:, -1]
@@ -486,9 +487,15 @@ class PhysDimeNet(nn.Module):
         if self.debug_mode:
             if torch.abs(mol_pred_properties.detach()).max() > 1e4:
                 error_message(torch.abs(mol_pred_properties.detach()).max(), 'Energy prediction')
+
         if self.action == "E":
-            return mol_pred_properties[:, 0], F_pred, Q_pred, D_pred, nh_loss
+            E_pred = mol_pred_properties[:, 0]
         elif self.action == "names_and_QD":
-            return mol_pred_properties[:, :-1], F_pred, Q_pred, D_pred, nh_loss
+            E_pred = mol_pred_properties[:, :-1]
         else:
-            return mol_pred_properties, 0., 0., 0., nh_loss
+            E_pred = mol_pred_properties
+
+        output = (E_pred, F_pred, Q_pred, D_pred, nh_loss)
+        if self.requires_embedding:
+            output = (*output, vi, atom_mol_batch, Z)
+        return output

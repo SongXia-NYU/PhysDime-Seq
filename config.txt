@@ -1,8 +1,8 @@
 --debug_mode=False
---modules=P-noOut P-noOut P C
---bonding_type=BN BN BN BN
+--modules=P-noOut P-noOut P
+--bonding_type=BN BN BN
 --activations=ssp ssp ssp
---expansion_fn=(P_BN,P-noOut_BN):gaussian_64_10.0 C_BN:coulomb_10.0
+--expansion_fn=(P_BN,P-noOut_BN):gaussian_64_10.0
 --n_feature=160
 --n_dime_before_residual=1
 --n_dime_after_residual=2
@@ -13,7 +13,7 @@
 --n_bi_linear=8
 --num_epochs=1000
 --warm_up_steps=0
---data_provider=qm9
+--data_provider=dummy[dataset_name=frag20_sol_qm_cutoff-10.pt,split=frag20_sol_split_03102021.pt]
 --test_interval=-1
 --learning_rate=0.001
 --ema_decay=0.999
@@ -34,8 +34,8 @@
 --shared_normalize_param=True
 --edge_version=cutoff
 --cutoff=10.0
+--action=names
+--target_names=gasEnergy
+--n_output=1
 --boundary_factor=100.
---folder_prefix=exp191
---batch_norm=True
---comment=sim PhysNet, qm9 MMFF, FT
---coulomb_charge_correct=True
+--folder_prefix=exp270
