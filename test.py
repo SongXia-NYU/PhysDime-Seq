@@ -81,7 +81,7 @@ def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Los
               mse_fn=torch.nn.MSELoss(reduction='mean'), dataset_name='data', run_dir=None,
               n_forward=50, **kwargs):
     if args["uncertainty_modify"] == 'none':
-        result = val_step_new(net, data_loader, loss_fn, is_testing=True)
+        result = val_step_new(net, data_loader, loss_fn, embedding=False, lightweight=True)
         torch.save(result, os.path.join(run_dir, 'loss_{}.pt'.format(dataset_name)))
         return result, None
     elif args["uncertainty_modify"].split('_')[0].split('[')[0] in ['concreteDropoutModule', 'concreteDropoutOutput',

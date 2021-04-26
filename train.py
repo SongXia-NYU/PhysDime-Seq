@@ -142,7 +142,7 @@ def train_step(model, _optimizer, data_batch, loss_fn, max_norm, warm_up_schedul
     return result_loss
 
 
-def val_step_new(model, _data_loader, loss_fn, is_testing=False):
+def val_step_new(model, _data_loader, loss_fn, embedding=False, lightweight=True):
     model.eval()
     valid_size = 0
     loss = 0.
@@ -151,12 +151,12 @@ def val_step_new(model, _data_loader, loss_fn, is_testing=False):
         _batch_size = len(val_data.N)
         E_pred, F_pred, Q_pred, D_pred, loss_nh, *extra = model(val_data)
         aggr_loss, loss_detail = loss_fn(E_pred, F_pred, Q_pred, D_pred, val_data,
-                                         loss_detail=True, diff_detail=is_testing)
+                                         loss_detail=True, diff_detail=embedding)
         loss += aggr_loss.item() * _batch_size
         if detail is None:
             # -----init------ #
             detail = copy(loss_detail)
-            if is_testing:
+            if embedding:
                 detail["EMBEDDING"] = []
                 detail["ATOM_MOL_BATCH"] = []
                 detail["ATOM_Z"] = []
@@ -164,14 +164,18 @@ def val_step_new(model, _data_loader, loss_fn, is_testing=False):
                 if key.startswith("MAE") or key.startswith("RMSE"):
                     detail[key] = 0.
                 elif key.startswith("DIFF"):
-                    detail[key] = []
+                    # :param lightweight: to make the final file small, otherwise it grows into several GBs
+                    if lightweight:
+                        del detail[key]
+                    else:
+                        detail[key] = []
 
         for key in detail:
             if key.startswith("MAE") or key.startswith("RMSE"):
                 detail[key] += loss_detail[key] * _batch_size
             elif key.startswith("DIFF"):
                 detail[key].append(loss_detail[key])
-        if is_testing:
+        if embedding:
             detail["EMBEDDING"].append(extra[0].detach().cpu())
             detail["ATOM_MOL_BATCH"].append(extra[1].detach().cpu()+valid_size)
             detail["ATOM_Z"].append(extra[2].detach().cpu())
