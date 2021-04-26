@@ -115,7 +115,7 @@ def test_step(args, net, data_loader, total_size, loss_fn, mae_fn=torch.nn.L1Los
         raise ValueError('unrecognized uncertainty_modify: {}'.format(args.uncertainty_modify))
 
 
-def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active=False):
+def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active=False, ignore_train=True):
     # --------------- Dealing with active learning and uncertainty models -------------------- #
     if folder_name.find('active') >= 0 and check_active:
         cycle_folders = glob.glob(osp.join(folder_name, 'cycle*_run_*'))
@@ -207,6 +207,8 @@ def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active
     logger.info("test size: {}".format(len(data_provider.test_index)))
 
     for index_name in ["train_index", "val_index", "test_index"]:
+        if ignore_train and index_name == "train_index":
+            continue
         index_name_ = index_name.split("_")[0]
         this_index = getattr(data_provider, index_name)
         this_data_loader = torch.utils.data.DataLoader(
