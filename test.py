@@ -199,8 +199,6 @@ def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active
     for name in ["gasEnergy", "watEnergy", "octEnergy"]:
         if name in data_provider[0]:
             subtract_ref(data_provider, None, data_root=args["data_root"])
-            logger.info("{} max: {}".format(name, getattr(data_provider, name).max().item()))
-            logger.info("{} min: {}".format(name, getattr(data_provider, name).min().item()))
             break
 
     if args["remove_atom_ids"] > 0:
