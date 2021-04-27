@@ -12,7 +12,7 @@ import pandas as pd
 import torch
 import shutil
 
-from DataPrepareUtils import my_pre_transform, remove_atom_from_dataset
+from DataPrepareUtils import my_pre_transform, remove_atom_from_dataset, subtract_ref
 from Frag9to20MixIMDataset import Frag9to20MixIMDataset, uniform_split
 from Networks.PhysDimeNet import PhysDimeNet
 from Networks.UncertaintyLayers.swag import SWAG
@@ -194,6 +194,14 @@ def test_folder(folder_name, n_forward, x_forward, use_exist=False, check_active
         data_provider = data_provider[0]
     else:
         data_provider_test = data_provider
+
+    # ----------------- dataset process on the fly --------------- #
+    for name in ["gasEnergy", "watEnergy", "octEnergy"]:
+        if name in data_provider[0]:
+            subtract_ref(data_provider, None, data_root=args["data_root"])
+            logger.info("{} max: {}".format(name, getattr(data_provider, name).max().item()))
+            logger.info("{} min: {}".format(name, getattr(data_provider, name).min().item()))
+            break
 
     if args["remove_atom_ids"] > 0:
         _, data_provider.val_index, _ = remove_atom_from_dataset(args["remove_atom_ids"], data_provider, ("valid",),
